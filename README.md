@@ -35,8 +35,7 @@ Approximately 16 proglacial areas in northern Sweden including Kårsa, Suottas, 
 ├── Proglacial_project.py      # Step 1: Preprocess S2 and orthophoto bands; OLS band correlation
 ├── NDVI_functions.py          # NDVI calculation helpers (corrected and non-corrected)
 ├── Calibration_NDVI.py        # Step 2: Correct ortho bands, compute NDVI, OLS correlation
-├── Veg_RF.py                  # Step 3a: RF vegetation classification at 1 m (random split + external validation)
-├── Veg_RF_polygon_cv.py       # Step 3b: RF vegetation classification with polygon-based cross-validation
+├── Veg_RF_polygon_cv.py       # Step 3: RF vegetation classification with polygon-based cross-validation
 ├── High_res_script.py         # DTM helpers: mosaic, clip, fill, terrain variable calculation
 ├── Variable_calculation.py    # Step 4: Calculate terrain variables at 1 m from LiDAR DEM
 ├── Low_res_script.py          # Step 5: Calculate terrain variables at 20 m; integrate snow cover
@@ -45,7 +44,8 @@ Approximately 16 proglacial areas in northern Sweden including Kårsa, Suottas, 
 ├── ndvi_validation.py         # Validate predicted vegetation rasters against S2 NDVI
 ├── Selection_ratio.py         # Selection ratio and partial dependence plots (both resolutions)
 ├── geodiversity_index_HL.py   # Geodiversity index: sliding-window diversity (Landforms x TRI method)
-└── geodiversity_index_PCA.py  # Geodiversity index: PCA composite of terrain variables
+├── geodiversity_index_PCA.py  # Geodiversity index: PCA composite of terrain variables
+└── geodiv_veg_all_areas.py    # Step 8: Geodiversity–vegetation correlation across all study areas
 ```
 
 ## Workflow
@@ -92,8 +92,9 @@ Approximately 16 proglacial areas in northern Sweden including Kårsa, Suottas, 
 - **PCA index**: composite of Curvature, Landforms, TRI, and SWI; computed at both 1 m and 20 m
 - Both indices classified into five levels (Very low to Very high)
 
-### 8. Vegetation–Geodiversity Relationship (`'geodiv_veg_all_areas.py`)
-- Point-biserial correlation between predicted vegetation and geodiversity indices
+### 8. Vegetation–Geodiversity Relationship (`geodiv_veg_all_areas.py`)
+- Point-biserial correlation between predicted vegetation and geodiversity indices across all study areas
+- Selection ratio per geodiversity class at both 1 m and 20 m resolution
 
 ## Dependencies
 
