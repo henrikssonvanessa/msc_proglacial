@@ -62,7 +62,7 @@ Approximately 16 proglacial areas in northern Sweden including Kårsa, Suottas, 
 - Compute NDVI for corrected ortho, non-corrected ortho and Sentinel-2 independently
 - Compute OLS correlation
 
-### 3. Vegetation Mapping (`Veg_RF.py`, `Veg_RF_polygon_cv.py`)
+### 3. Vegetation Mapping (`Veg_RF_polygon_cv.py`)
 - Train a Random Forest classifier (300 trees, max depth 20) on 4-band orthophoto pixels sampled within training polygons
 - Binary target: vegetation (1) vs. non-vegetation (2)
 - Validation strategies:
@@ -94,7 +94,7 @@ Approximately 16 proglacial areas in northern Sweden including Kårsa, Suottas, 
 
 ### 8. Vegetation–Geodiversity Relationship (`geodiv_veg_all_areas.py`)
 - Point-biserial correlation between predicted vegetation and geodiversity indices across all study areas
-- Selection ratio per geodiversity class at both 1 m and 20 m resolution
+- Calculation of dominant geodiversity class per study area at both 1 m and 20 m resolution
 
 ## Dependencies
 
