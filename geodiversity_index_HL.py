@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # coding: utf-8
 """
-Step 7a — Hjort & Luoto (H&L) geodiversity index.
+Step 7a — Serrano & Ruiz-Flaño (H&L) geodiversity index.
 
 This script computes a geodiversity index following the approach of
-Hjort & Luoto (2006), adapted for proglacial terrain.
+Serrano & Ruiz-Flaño (2007), adapted for proglacial terrain.
 
 Method
 ------
@@ -144,7 +144,7 @@ def minmax_normalize(arr, global_min, global_max):
 # ── Process each resolution ───────────────────────────────────────────────────
 for res_label, res_folder in RESOLUTIONS.items():
     print(f"\n{'='*60}")
-    print(f"Processing {res_label} resolution — Hjort & Luoto method")
+    print(f"Processing {res_label} resolution — Serrano & Ruiz-Flaño method")
     print(f"{'='*60}")
 
     fig_folder = Path(f"{res_folder}/Figures/Geodiversity")
@@ -220,7 +220,7 @@ for res_label, res_folder in RESOLUTIONS.items():
     print(f"  TRI range:                {global_tri_min:.3f} – {global_tri_max:.3f}")
 
     # ── Pass 2: compute H&L geodiversity index per area ───────────────────────
-    print("\nPass 2 — computing Hjort & Luoto geodiversity index...")
+    print("\nPass 2 — computing Serrano & Ruiz-Flaño geodiversity index...")
 
     geoindex_maps       = {}
     all_geoindex_values = []
@@ -248,7 +248,7 @@ for res_label, res_folder in RESOLUTIONS.items():
         lf_norm  = minmax_normalize(lf_div,  global_div_min, global_div_max)
         tri_norm = minmax_normalize(tri_arr, global_tri_min, global_tri_max)
 
-        # H&L index: product of diversity and roughness
+        # Serrano & Ruiz-Flaño index: product of diversity and roughness
         # High index requires BOTH diverse landforms AND rough terrain
         geoindex = lf_norm * tri_norm
 
@@ -356,11 +356,11 @@ for res_label, res_folder in RESOLUTIONS.items():
     if im is not None:
         fig.colorbar(im, ax=axes_flat[:len(geoindex_maps)],
                      orientation='vertical', fraction=0.02, pad=0.02,
-                     label='Geoindex (H&L)', shrink=0.6)
+                     label='Geoindex (Serrano & Ruiz-Flaño)', shrink=0.6)
 
     fig.suptitle(
         f"Geodiversity Index — {res_label} resolution\n"
-        f"Hjort & Luoto method (landform diversity × TRI, {WINDOW_SIZE}x{WINDOW_SIZE} window)",
+        f"Serrano & Ruiz-Flaño method (landform diversity × TRI, {WINDOW_SIZE}x{WINDOW_SIZE} window)",
         fontsize=14, fontweight='bold'
     )
     plt.savefig(fig_folder / f"geodiversity_index_hl_{res_label}.png",
