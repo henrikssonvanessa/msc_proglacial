@@ -42,8 +42,6 @@ Outputs:
 """
 
 import os
-os.chdir(r"C:\TEMP\Vanessa_Henriksson")
-print(os.getcwd())
 
 import pandas as pd
 import geopandas as gpd
@@ -60,16 +58,23 @@ from pathlib import Path
 import matplotlib
 matplotlib.use('Agg')  # non-interactive backend for saving figures without a display
 
+from config_utils import load_config
+
+cfg = load_config()
+os.chdir(cfg.paths.base_dir)
+print(os.getcwd())
+
 # ── CONFIG ────────────────────────────────────────────────────────────────────
-BLOCK_SIZE = 200   # spatial block size in metres; should be larger than the
-                   # range of spatial autocorrelation in the terrain data
-N_FOLDS    = 5     # number of spatial CV folds
+BLOCK_SIZE = cfg.cross_validation.block_size_1m   # spatial block size in metres; should be larger than the
+                                                   # range of spatial autocorrelation in the terrain data
+N_FOLDS    = cfg.cross_validation.block_cv_folds  # number of spatial CV folds
+RF_PARAMS  = dict(n_estimators=cfg.random_forest.terrain_classifier.n_estimators, random_state=cfg.random_state)
 # ─────────────────────────────────────────────────────────────────────────────
 
-study_areas = gpd.read_file("Data/proglacial_outlines.shp")
-study_areas = study_areas.drop(index=[12, 14])
+study_areas = gpd.read_file(cfg.paths.outlines_shp)
+study_areas = study_areas.drop(index=cfg.study_areas.exclude_indices)
 
-fig_folder = Path("Data/Python/Outputs/Figures")
+fig_folder = Path(cfg.paths.outputs_1m) / "Figures"
 fig_folder.mkdir(parents=True, exist_ok=True)
 
 # Storage for summary CSVs (one row per study area)
@@ -79,14 +84,14 @@ perm_veg_rows     = []
 
 for area in study_areas.itertuples():
     area_name = area.Glacier_na
-    geodiv_out_dir = f"Data/Python/Outputs/{area_name}/Geodiversity"
+    geodiv_out_dir = f"{cfg.paths.outputs_1m}/{area_name}/Geodiversity"
     print(f"\n{'='*60}\nProcessing {area_name}\n{'='*60}")
 
     # ── Load sample data ───────────────────────────────────────────────────────
     # The samples shapefile has one row per sample point; columns v_raster_1…
     # v_raste_11 contain terrain variable values extracted by ArcPy in Step 4.
     gdf_full = gpd.read_file(f"{geodiv_out_dir}/{area_name}_samples.shp")
-    gdf_full = gdf_full.replace(-9999, np.nan)  # replace ArcPy NoData sentinel
+    gdf_full = gdf_full.replace(cfg.nodata_value, np.nan)  # replace ArcPy NoData sentinel
     gdf = gdf_full.dropna()  # remove rows with any missing variable
     print(f"Samples before NaN removal: {len(gdf_full)}")
     print(f"Samples after NaN removal:  {len(gdf)}")
@@ -143,7 +148,7 @@ for area in study_areas.itertuples():
     }
 
     cv_results = cross_validate(
-        RandomForestClassifier(n_estimators=100, random_state=42),
+        RandomForestClassifier(**RF_PARAMS),
         x, y,
         groups=block_ids,
         cv=gkf,
@@ -168,8 +173,8 @@ for area in study_areas.itertuples():
     # relative to block CV. The delta between the two indicates bias magnitude.
     from sklearn.model_selection import train_test_split
     x_train, x_test, y_train, y_test = train_test_split(
-        x, y, test_size=0.3, random_state=42)
-    rf_rs = RandomForestClassifier(n_estimators=100, random_state=42)
+        x, y, test_size=cfg.cross_validation.random_split_test_size, random_state=cfg.random_state)
+    rf_rs = RandomForestClassifier(**RF_PARAMS)
     rf_rs.fit(x_train, y_train)
     preds_rs = rf_rs.predict(x_test)
 
@@ -189,7 +194,7 @@ for area in study_areas.itertuples():
     # ── Refit on ALL data for importance and PDP plots ─────────────────────────
     # Cross-validation estimates generalisation performance; importance and PDP
     # plots use a model trained on all available data to maximise stability.
-    rf = RandomForestClassifier(n_estimators=100, random_state=42)
+    rf = RandomForestClassifier(**RF_PARAMS)
     rf.fit(x, y)
 
     veg_samples = x[y == 1]   # vegetation-only subset for histogram overlays in PDPs
@@ -213,7 +218,7 @@ for area in study_areas.itertuples():
     # shuffled (breaking its relationship with the target). More robust than MDI
     # because it is measured on the actual data distribution.
     perm_acc = permutation_importance(rf, x, y, n_repeats=30,
-                                      random_state=42, n_jobs=-1)
+                                      random_state=cfg.random_state, n_jobs=-1)
     indices = np.argsort(perm_acc.importances_mean)
     plt.figure(figsize=(12, 10))
     plt.barh(np.array(x.columns)[indices],
@@ -232,7 +237,7 @@ for area in study_areas.itertuples():
     # identifying vegetated pixels (more ecologically relevant metric here).
     veg_recall = make_scorer(recall_score, pos_label=1)
     perm_veg = permutation_importance(rf, x, y, scoring=veg_recall,
-                                      n_repeats=30, random_state=42, n_jobs=-1)
+                                      n_repeats=30, random_state=cfg.random_state, n_jobs=-1)
     indices = np.argsort(perm_veg.importances_mean)
     plt.figure(figsize=(12, 10))
     plt.barh(np.array(x.columns)[indices],
@@ -322,7 +327,7 @@ for area in study_areas.itertuples():
     print("Spearman correlation matrix saved.")
 
 # ── Export summary CSVs ───────────────────────────────────────────────────────
-csv_folder = Path("Data/Python/Outputs")
+csv_folder = Path(cfg.paths.outputs_1m)
 
 df_random = pd.DataFrame(random_split_rows)
 df_random.to_csv(csv_folder / "metrics_random_split.csv", index=False)

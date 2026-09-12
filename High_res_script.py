@@ -24,7 +24,7 @@ import arcpy
 from arcpy.sa import *
 
 
-def mosaic_dem(area_shp, area_name, geodiv_out_dir):
+def mosaic_dem(area_shp, area_name, geodiv_out_dir, dem_tiles_dir):
     """
     Merge LiDAR DEM tiles for one study area, clip to the study area, and fill sinks.
 
@@ -38,12 +38,14 @@ def mosaic_dem(area_shp, area_name, geodiv_out_dir):
     area_shp       : str  Path to the single-area shapefile (used as mask)
     area_name      : str  Glacier name
     geodiv_out_dir : str  Output directory for geodiversity products
+    dem_tiles_dir  : str  Directory containing per-area LiDAR DEM tile subfolders
+                          (config: paths.dem_tiles_dir)
 
     Returns
     -------
     str  Path to the merged (non-clipped) DEM raster
     """
-    dem_folder = f"C:/TEMP/Vanessa_Henriksson/Data/DEM/Markhöjdmodell/{area_name}"
+    dem_folder = f"{dem_tiles_dir}/{area_name}"
 
     # Collect all .tif DEM tiles in the area-specific folder
     files_list = os.listdir(dem_folder)
@@ -80,7 +82,8 @@ def mosaic_dem(area_shp, area_name, geodiv_out_dir):
     return merged_dem_path
 
 
-def calculate_variables(area_name, geodiv_out_dir, merged_dem_path, sun_azim, sun_alt, area_shp, glacier_shp):
+def calculate_variables(area_name, geodiv_out_dir, merged_dem_path, sun_azim, sun_alt, area_shp, glacier_shp,
+                        glacier_polygon_scratch_path, geomorphon_search_radius=3):
     """
     Derive terrain variables from the LiDAR DEM using ArcPy Spatial Analyst.
 
@@ -112,6 +115,11 @@ def calculate_variables(area_name, geodiv_out_dir, merged_dem_path, sun_azim, su
     sun_alt        : float Sun altitude angle in degrees (from lookup table)
     area_shp       : str   Path to single-area shapefile (spatial mask)
     glacier_shp    : str   Path to glacier polygon shapefile (for distance calculation)
+    glacier_polygon_scratch_path : str  Scratch feature class path used to hold the
+                          per-area glacier polygon selection (config: paths.glacier_polygon_scratch_gdb)
+    geomorphon_search_radius : int  Search radius in metres for geomorphon landform
+                          classification (config: terrain_variables.geomorphon_search_radius_multiplier
+                          * resolution in metres; default 3 m at 1 m resolution)
     """
     merged_dem = Raster(merged_dem_path)
 
@@ -165,12 +173,12 @@ def calculate_variables(area_name, geodiv_out_dir, merged_dem_path, sun_azim, su
     Geomorphon_Landforms = Geomorp_MHM_1
     Output_geomorphons_raster = f"{geodiv_out_dir}/{area_name}_geomorph.tif"
     with arcpy.EnvManager(mask=area_shp, snapRaster=merged_dem_path):
-        Geomorp_MHM_1 = arcpy.sa.GeomorphonLandforms(merged_dem, Output_geomorphons_raster, 1, "METERS", 3, None, "METER")
+        Geomorp_MHM_1 = arcpy.sa.GeomorphonLandforms(merged_dem, Output_geomorphons_raster, 1, "METERS", geomorphon_search_radius, None, "METER")
         Geomorp_MHM_1.save(Geomorphon_Landforms)
     print("Landforms")
 
     # Select glacier polygon for this specific area from the master shapefile
-    glacier_polygon_Select = "C:\\TEMP\\Vanessa_Henriksson\\RD_GIS\\RD_GIS.gdb\\glacier_polygon_Select"
+    glacier_polygon_Select = glacier_polygon_scratch_path
     arcpy.analysis.Select(in_features=glacier_shp, out_feature_class=glacier_polygon_Select, where_clause=f"Glacier_na = '{area_name}'")
 
     # Distance accumulation: horizontal distance from glacier boundary for each pixel
@@ -199,7 +207,9 @@ def calculate_variables(area_name, geodiv_out_dir, merged_dem_path, sun_azim, su
     print("Curvature")
 
 
-def sample_areas(geodiv_out_dir, area_name, merged_dem_path):
+def sample_areas(geodiv_out_dir, area_name, merged_dem_path, arcgis_toolbox_path,
+                 predicted_vegetation_dir, sample_fraction=0.10, sample_max_per_class=2000,
+                 min_sample_distance_m=2):
     """
     Create stratified sample points and extract terrain variable values at each point.
 
@@ -208,8 +218,10 @@ def sample_areas(geodiv_out_dir, area_name, merged_dem_path):
         neighbour (to match DEM resolution) so that vegetation and terrain variables
         are spatially aligned.
       - Stratified sampling by vegetation class (1=veg, 2=non-veg) ensures both
-        classes are represented. Sample size = 10% of the smaller class, max 2000.
-      - Minimum distance of 2 m between sample points reduces spatial autocorrelation.
+        classes are represented. Sample size = sample_fraction of the smaller class,
+        capped at sample_max_per_class.
+      - Minimum distance of min_sample_distance_m between sample points reduces
+        spatial autocorrelation.
       - All terrain variable rasters are then sampled at the selected point locations
         using NEAREST neighbour extraction.
 
@@ -219,11 +231,20 @@ def sample_areas(geodiv_out_dir, area_name, merged_dem_path):
 
     Parameters
     ----------
-    geodiv_out_dir : str  Output directory containing terrain variable rasters
-    area_name      : str  Glacier name
-    merged_dem_path: str  Path to merged DEM (used as snap raster for resampling)
+    geodiv_out_dir       : str   Output directory containing terrain variable rasters
+    area_name            : str   Glacier name
+    merged_dem_path      : str   Path to merged DEM (used as snap raster for resampling)
+    arcgis_toolbox_path  : str   Path to ArcGIS Pro's Data Management Tools.tbx
+                                 (config: paths.arcgis_toolbox_data_management)
+    predicted_vegetation_dir : str  Directory holding the 0.4 m predicted vegetation
+                                 rasters (config: paths.predicted_vegetation_1m)
+    sample_fraction      : float Fraction of the smaller class to sample (config:
+                                 high_res_sampling.sample_fraction)
+    sample_max_per_class : int   Max samples per class (config: high_res_sampling.sample_max_per_class)
+    min_sample_distance_m: float Minimum spacing between sample points, in metres
+                                 (config: high_res_sampling.min_sample_distance_m)
     """
-    arcpy.ImportToolbox(r"c:\program files\arcgis\pro\Resources\ArcToolbox\toolboxes\Data Management Tools.tbx")
+    arcpy.ImportToolbox(arcgis_toolbox_path)
     arcpy.CheckOutExtension("ImageExt")
     arcpy.CheckOutExtension("ImageAnalyst")
 
@@ -249,7 +270,7 @@ def sample_areas(geodiv_out_dir, area_name, merged_dem_path):
 
     # Resample vegetation from 0.4 m to 1 m using NEAREST (categorical data)
     # so it aligns exactly with the 1 m DEM-derived variables
-    predicted_vegetation_04m = f"C:\\TEMP\\Vanessa_Henriksson\\Data\\Python\\Outputs\\Predicted_vegetation\\{area_name}_predicted_vegetation.tif"
+    predicted_vegetation_04m = f"{predicted_vegetation_dir}/{area_name}_predicted_vegetation.tif"
     predicted_vegetation_1m = os.path.join(variables_folder, f"{area_name}_predicted_vegetation_1m.tif")
     with arcpy.EnvManager(snapRaster=merged_dem_path):
         arcpy.management.Resample(predicted_vegetation_04m, predicted_vegetation_1m, "1", "NEAREST")
@@ -267,8 +288,8 @@ def sample_areas(geodiv_out_dir, area_name, merged_dem_path):
 
     print(f"Vegetation pixels: {veg_count}, Non-vegetation pixels: {non_veg_count}")
 
-    # 10% of smallest class, capped at 2000 per class
-    num_samples_per_strata = min(int(min_class_count * 0.10), 2000)
+    # sample_fraction of smallest class, capped at sample_max_per_class per class
+    num_samples_per_strata = min(int(min_class_count * sample_fraction), sample_max_per_class)
     num_samples = num_samples_per_strata * 2  # total across both classes
 
     print(f"Dynamic sampling: {num_samples_per_strata} samples per strata ({num_samples} total)")
@@ -283,7 +304,7 @@ def sample_areas(geodiv_out_dir, area_name, merged_dem_path):
         strata_id_field="Value",
         num_samples=num_samples,
         num_samples_per_strata=num_samples_per_strata,
-        min_distance="2 Meters"  # minimum 2 m spacing to reduce spatial autocorrelation
+        min_distance=f"{min_sample_distance_m} Meters"  # minimum spacing to reduce spatial autocorrelation
     )
     print("Sampling locations created.")
 

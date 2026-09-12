@@ -39,8 +39,6 @@ Requires: rasterio, scipy, numpy
 """
 
 import os
-os.chdir(r"C:\TEMP\Vanessa_Henriksson")
-print(os.getcwd())
 
 import numpy as np
 import geopandas as gpd
@@ -52,19 +50,28 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
+from config_utils import load_config, resolve_path
+
+cfg = load_config()
+os.chdir(cfg.paths.base_dir)
+print(os.getcwd())
+
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 RESOLUTIONS = {
-    '1m':  'Data/Python/Outputs',    # 1 m: window = 10 × 10 m physical extent
-    '20m': 'Data/Python/Outputs_20m', # 20 m: window = 200 × 200 m physical extent
+    '1m':  cfg.paths.outputs_1m,    # 1 m: window = WINDOW_SIZE x WINDOW_SIZE m physical extent
+    '20m': cfg.paths.outputs_20m,   # 20 m: window = WINDOW_SIZE*20 x WINDOW_SIZE*20 m physical extent
 }
 
-WINDOW_SIZE = 10   # pixels; at 1 m res = 10 m, at 20 m res = 200 m
+WINDOW_SIZE = cfg.geodiversity.window_size   # pixels; at 1 m res = 10 m, at 20 m res = 200 m
 
-NODATA_VAL  = -9999
+NODATA_VAL  = cfg.nodata_value
+SD_MULTIPLIER_WIDE, SD_MULTIPLIER_NARROW = cfg.classification.sd_multipliers
+CLASS_LABELS = cfg.classification.labels
+TRI_SWI_20M_DIR = resolve_path(cfg, cfg.paths.tri_swi_20m_dir)
 # ─────────────────────────────────────────────────────────────────────────────
 
-study_areas = gpd.read_file("Data/proglacial_outlines.shp")
-study_areas = study_areas.drop(index=[12, 14])
+study_areas = gpd.read_file(cfg.paths.outlines_shp)
+study_areas = study_areas.drop(index=cfg.study_areas.exclude_indices)
 area_names  = [area.Glacier_na for area in study_areas.itertuples()]
 
 
@@ -110,8 +117,8 @@ def get_tri_path(res_folder, area_name):
     At 20 m resolution, TRI was pre-computed by SAGA GIS and stored in a
     separate directory with a different naming convention.
     """
-    if res_folder.endswith('Outputs_20m'):
-        return rf"C:\TEMP\Vanessa_Henriksson\Data\DEM\TRI_SWI_20m\TIF_TRI_{area_name}_DEM_clip.tif"
+    if res_folder == RESOLUTIONS['20m']:
+        return f"{TRI_SWI_20M_DIR}/TIF_TRI_{area_name}_DEM_clip.tif"
     return f"{res_folder}/{area_name}/Geodiversity/{area_name}_TRI.tif"
 
 
@@ -273,13 +280,13 @@ for res_label, res_folder in RESOLUTIONS.items():
 
     bounds = [
         -np.inf,
-        global_mean - 1.5 * global_std,   # upper bound of class 1 (Very low)
-        global_mean - 0.5 * global_std,   # upper bound of class 2 (Low)
-        global_mean + 0.5 * global_std,   # upper bound of class 3 (Medium)
-        global_mean + 1.5 * global_std,   # upper bound of class 4 (High)
-        np.inf                             # class 5 (Very high)
+        global_mean - SD_MULTIPLIER_WIDE * global_std,     # upper bound of class 1 (Very low)
+        global_mean - SD_MULTIPLIER_NARROW * global_std,   # upper bound of class 2 (Low)
+        global_mean + SD_MULTIPLIER_NARROW * global_std,   # upper bound of class 3 (Medium)
+        global_mean + SD_MULTIPLIER_WIDE * global_std,     # upper bound of class 4 (High)
+        np.inf                                              # class 5 (Very high)
     ]
-    class_labels = ['Very low', 'Low', 'Medium', 'High', 'Very high']
+    class_labels = CLASS_LABELS
 
     print(f"\nGlobal Geoindex — mean: {global_mean:.3f}, std: {global_std:.3f}")
     print("Classification boundaries:")
@@ -297,7 +304,7 @@ for res_label, res_folder in RESOLUTIONS.items():
             'transform': area_transforms[area_name],
             'dtype':     'float32',
             'count':     1,
-            'nodata':    -9999,
+            'nodata':    NODATA_VAL,
             'compress':  'lzw',
             'crs':       rasterio.crs.CRS.from_epsg(3006),
         })
@@ -306,7 +313,7 @@ for res_label, res_folder in RESOLUTIONS.items():
         classified = np.zeros(geoindex.shape, dtype=np.int16)
         for k in range(5):
             classified[(geoindex >= bounds[k]) & (geoindex < bounds[k+1])] = k + 1
-        classified[np.isnan(geoindex)] = -9999
+        classified[np.isnan(geoindex)] = NODATA_VAL
 
         # Save continuous index
         out_cont = Path(res_folder) / area_name / "Geodiversity" / \

@@ -32,8 +32,6 @@ Outputs
 """
 
 import os
-os.chdir(r"C:\TEMP\Vanessa_Henriksson")
-print(os.getcwd())
 
 import numpy as np
 import pandas as pd
@@ -47,27 +45,34 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
+from config_utils import load_config
+
+cfg = load_config()
+os.chdir(cfg.paths.base_dir)
+print(os.getcwd())
+
 # Fix random seed so subsampling is reproducible across runs
-np.random.seed(42)
+np.random.seed(cfg.random_state)
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 RESOLUTIONS = {
-    '1m':  'Data/Python/Outputs',
-    '20m': 'Data/Python/Outputs_20m',
+    '1m':  cfg.paths.outputs_1m,
+    '20m': cfg.paths.outputs_20m,
 }
 
-NODATA        = -9999
-SAMPLE_PIXELS = 200_000   # cap for point-biserial correlation (speed + memory)
-GEODIV_LABELS = {1: 'Very low', 2: 'Low', 3: 'Medium', 4: 'High', 5: 'Very high'}
+NODATA        = cfg.nodata_value
+SAMPLE_PIXELS = cfg.stats.sample_pixels_cap   # cap for point-biserial correlation (speed + memory)
+GEODIV_LABELS = {i + 1: label for i, label in enumerate(cfg.classification.labels)}
+SD_MULTIPLIER_WIDE, SD_MULTIPLIER_NARROW = cfg.classification.sd_multipliers
 # ─────────────────────────────────────────────────────────────────────────────
 
-study_areas = gpd.read_file("Data/proglacial_outlines.shp")
-study_areas = study_areas.drop(index=[12, 14])
+study_areas = gpd.read_file(cfg.paths.outlines_shp)
+study_areas = study_areas.drop(index=cfg.study_areas.exclude_indices)
 if study_areas.crs is None:
     study_areas = study_areas.set_crs('EPSG:3006')  # SWEREF99 TM
 area_names  = [area.Glacier_na for area in study_areas.itertuples()]
 
-out_folder = Path("Data/Python/Outputs/Geo_veg_relation")
+out_folder = Path(cfg.paths.outputs_1m) / "Geo_veg_relation"
 out_folder.mkdir(parents=True, exist_ok=True)
 
 FALLBACK_CRS = 'EPSG:3006'  # used when a raster file has no embedded CRS metadata
@@ -285,8 +290,8 @@ def bin_hl_to_classes(hl_arr):
     if len(valid) == 0:
         return None
     gm, gs = valid.mean(), valid.std()
-    bounds = [-np.inf, gm - 1.5*gs, gm - 0.5*gs,
-               gm + 0.5*gs, gm + 1.5*gs, np.inf]
+    bounds = [-np.inf, gm - SD_MULTIPLIER_WIDE*gs, gm - SD_MULTIPLIER_NARROW*gs,
+               gm + SD_MULTIPLIER_NARROW*gs, gm + SD_MULTIPLIER_WIDE*gs, np.inf]
     classified = np.full(hl_arr.shape, np.nan)
     for k in range(5):
         mask = (hl_arr >= bounds[k]) & (hl_arr < bounds[k+1])
@@ -311,7 +316,7 @@ for area_row in study_areas.itertuples():
         # The 1 m vegetation raster lives in a shared folder (not per-area)
         veg_path = f"{res_folder}/{area_name}/Geodiversity/{area_name}_predicted_vegetation_{res_label}.tif"
         if res_label == '1m':
-            veg_path = f"Data/Python/Outputs/Predicted_vegetation/{area_name}_predicted_vegetation.tif"
+            veg_path = f"{cfg.paths.predicted_vegetation_1m}/{area_name}_predicted_vegetation.tif"
 
         hl_path            = f"{res_folder}/{area_name}/Geodiversity/{area_name}_geoindex_hl_{res_label}.tif"
         ds_path            = f"{res_folder}/{area_name}/Geodiversity/{area_name}_geoindex_{res_label}.tif"

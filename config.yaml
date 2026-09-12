@@ -1,0 +1,105 @@
+# Configuration for the MSc proglacial vegetation/geodiversity pipeline.
+#
+# Every script in this repository reads its tunable settings from this file
+# instead of hardcoding them. To run the pipeline on a different machine or
+# dataset, edit the values below (at minimum `paths.base_dir`) rather than
+# touching the scripts themselves.
+#
+# Loaded via config_utils.load_config(). Override the file location with the
+# PROGLACIAL_CONFIG environment variable if you keep multiple configs
+# (e.g. one per collaborator or study).
+
+paths:
+  base_dir: "C:/TEMP/Vanessa_Henriksson"             # root working directory (scripts chdir here)
+  outlines_shp: "Data/proglacial_outlines.shp"        # master study-area polygons
+  glacier_shp: "Data/glacier_polygon.shp"             # glacier polygons (distance-from-glacier calc)
+  lookup_table_gd: "Data/Python/lookup_table_gd.csv"  # per-area sun azimuth/altitude (for hillshade)
+  training_gdb: "Proglacial_outline/training_data.gdb"
+  external_test_gdb: "Proglacial_outline/external_test_data.gdb"
+  outputs_1m: "Data/Python/Outputs"
+  outputs_20m: "Data/Python/Outputs_20m"
+  predicted_vegetation_1m: "Data/Python/Outputs/Predicted_vegetation"
+  predicted_vegetation_polygon_cv: "Data/Python/Outputs/Predicted_vegetation_polygon_cv"
+  dem_tiles_dir: "Data/DEM/Markhöjdmodell"            # per-area LiDAR DEM tile folders
+  snow_cover_dir: "Data/Snow_data"
+  tri_swi_20m_dir: "Data/DEM/TRI_SWI_20m"             # pre-computed SAGA TRI/SWI rasters at 20 m
+  glacier_polygon_scratch_gdb: "RD_GIS/RD_GIS.gdb/glacier_polygon_Select"  # scratch feature class for DistanceAccumulation
+  arcgis_toolbox_data_management: "c:/program files/arcgis/pro/Resources/ArcToolbox/toolboxes/Data Management Tools.tbx"
+
+random_state: 42          # shared seed for all RF models and random train/test splits
+nodata_value: -9999        # sentinel used throughout for masked/NoData pixels
+
+study_areas:
+  # Row indices (0-based, as read by geopandas from paths.outlines_shp) excluded
+  # from the current analysis (e.g. areas without complete input data).
+  exclude_indices: [12, 14]
+  external_validation_areas: ["Suottas", "Vartas"]
+  drone_only_area: "Kårsa"   # area with dedicated drone-resolution data ('5mm' / '12cm' modes)
+
+# Which pre-computed Sentinel-2 snow-cover composite tile covers each area (Low_res_script.py)
+snow_file_lookup:
+  Suottas: "T33WXQ_snow_cover.tif"
+  Vartas: "T33WXQ_snow_cover.tif"
+  Mikka: "T33WXQ_snow_cover.tif"
+  Ruotes: "T33WXQ_snow_cover.tif"
+  Pårte: "T33WXQ_snow_cover.tif"
+  Kårsa: "T33WXR_snow_cover.tif"
+  Riuko: "T33WXR_snow_cover.tif"
+  Gallan: "T33WXR_snow_cover.tif"
+  Unna_Räita: "T33WXR_snow_cover.tif"
+  Vaktpost: "T33WXR_snow_cover.tif"
+  Storglaciären: "T33WXR_snow_cover.tif"
+  Isfall: "T33WXR_snow_cover.tif"
+  Ballinriehppe_II_III: "T33WXR_snow_cover.tif"
+  Rabots: "T33WXR_snow_cover.tif"
+  Stuorra: "Stuorra_snow_cover.tif"
+  Helags: "Helags_snow_cover.tif"
+
+random_forest:
+  vegetation_classifier:      # Veg_RF_polygon_cv.py — 4-band ortho pixel classifier
+    n_estimators: 300
+    max_depth: 20
+    min_samples_leaf: 10
+  terrain_classifier:         # RF_block_test.py / rf_vegetation_20m.py / Selection_ratio.py
+    n_estimators: 100
+
+cross_validation:
+  polygon_cv_folds: 5          # Veg_RF_polygon_cv.py GroupKFold folds
+  block_cv_folds: 5            # RF_block_test.py / rf_vegetation_20m.py GroupKFold folds
+  block_size_1m: 200           # metres, spatial block size at 1 m resolution
+  block_size_20m: 400          # metres, spatial block size at 20 m resolution
+  random_split_test_size: 0.3
+
+terrain_variables:
+  geomorphon_search_radius_multiplier: 3   # search radius (m) = resolution_m * multiplier
+
+low_res:
+  target_resolution: 20         # metres
+  veg_fraction_threshold: 0.3   # min sub-pixel vegetation fraction to call a 20 m cell "vegetated"
+  sample_fraction: 0.50         # fraction of the smaller class to sample
+  sample_min_per_class: 50
+  sample_max_per_class: 500
+
+high_res_sampling:
+  sample_fraction: 0.10         # fraction of the smaller class to sample
+  sample_max_per_class: 2000
+  min_sample_distance_m: 2
+
+geodiversity:
+  window_size: 10                # pixels, sliding-window size for landform diversity (H&L method)
+  pca_feature_cols: ["Curvature", "Landforms", "TRI", "SWI"]
+
+classification:
+  # Geodiversity classes are assigned using global mean +/- sd_multipliers * std
+  sd_multipliers: [1.5, 0.5]
+  labels: ["Very low", "Low", "Medium", "High", "Very high"]
+
+stats:
+  sample_pixels_cap: 200000     # cap on pixels used for correlation tests (Spearman / point-biserial)
+
+selection_ratio:
+  resolution_mode: 20            # 1, 20, '5mm', or '12cm'
+  n_bins: 10
+  grid_resolution: 50
+  pdp_y_padding: 0.02
+  min_samples_reliable: 10

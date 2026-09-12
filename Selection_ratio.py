@@ -38,7 +38,6 @@ Outputs (per variable):
 """
 
 import os
-os.chdir(r"C:\TEMP\Vanessa_Henriksson")
 
 import numpy as np
 import pandas as pd
@@ -52,19 +51,29 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.inspection import partial_dependence
 from pathlib import Path
 
+from config_utils import load_config
+
+cfg = load_config()
+os.chdir(cfg.paths.base_dir)
+
 # ── CONFIG ────────────────────────────────────────────────────────────────────
-RESOLUTION      = 20   # set to 1, 20, '5mm', or '12cm'
-N_BINS          = 10   # number of equal-width bins per variable for selection ratio
-GRID_RESOLUTION = 50   # number of grid points for PDP curves
-PDP_Y_PADDING   = 0.02 # extra padding above/below the global PDP y-axis range
+RESOLUTION      = cfg.selection_ratio.resolution_mode   # set to 1, 20, '5mm', or '12cm'
+N_BINS          = cfg.selection_ratio.n_bins            # number of equal-width bins per variable for selection ratio
+GRID_RESOLUTION = cfg.selection_ratio.grid_resolution   # number of grid points for PDP curves
+PDP_Y_PADDING   = cfg.selection_ratio.pdp_y_padding     # extra padding above/below the global PDP y-axis range
+MIN_SAMPLES     = cfg.selection_ratio.min_samples_reliable  # minimum bin sample size for reliable SR estimation
+RF_PARAMS       = dict(n_estimators=cfg.random_forest.terrain_classifier.n_estimators, random_state=cfg.random_state)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Resolution-specific settings ─────────────────────────────────────────────
 # Each resolution has its own output folder, feature list, column rename map,
-# vegetation label encoding, and whether to restrict to Kårsa only.
+# vegetation label encoding, and whether to restrict to the drone-only area.
+# (The '5mm'/'12cm' drone modes reference data folders not produced by any
+# other script in this repo; they are kept here for compatibility with
+# externally-generated drone datasets.)
 
 if RESOLUTION == 1:
-    data_folder   = "Data/Python/Outputs"
+    data_folder   = cfg.paths.outputs_1m
     feature_cols  = ['Landforms', 'Distance', 'Aspect_sin', 'Elevation',
                      'Curvature', 'Aspect_cos', 'Hillshade', 'TRI', 'SWI']
     new_names     = {
@@ -80,7 +89,7 @@ if RESOLUTION == 1:
     karsa_only    = False
 
 elif RESOLUTION == 20:
-    data_folder   = "Data/Python/Outputs_20m"
+    data_folder   = cfg.paths.outputs_20m
     feature_cols  = ['Landforms', 'Distance', 'Aspect_sin', 'Elevation',
                      'Curvature', 'Aspect_cos', 'Hillshade', 'TRI', 'SWI',
                      'Snow_cover']
@@ -127,10 +136,10 @@ elif RESOLUTION == '12cm':
     veg_recode    = None
     karsa_only    = True
 
-study_areas = gpd.read_file("Data/proglacial_outlines.shp")
-study_areas = study_areas.drop(index=[12, 14])
+study_areas = gpd.read_file(cfg.paths.outlines_shp)
+study_areas = study_areas.drop(index=cfg.study_areas.exclude_indices)
 if karsa_only:
-    study_areas = study_areas[study_areas["Glacier_na"] == "Kårsa"]
+    study_areas = study_areas[study_areas["Glacier_na"] == cfg.study_areas.drone_only_area]
 area_names  = sorted([area.Glacier_na for area in study_areas.itertuples()])
 
 fig_folder = Path(f"{data_folder}/Figures")
@@ -154,7 +163,7 @@ for area in study_areas.itertuples():
     print(f"Pass 1 — {area_name}")
 
     gdf = gpd.read_file(f"{geodiv_out_dir}/{area_name}_samples.shp")
-    gdf = gdf.replace(-9999, np.nan).dropna()
+    gdf = gdf.replace(cfg.nodata_value, np.nan).dropna()
     gdf = gdf.rename(columns=new_names)
     # Keep only rows with valid vegetation labels
     gdf = gdf[gdf['Vegetation'].isin(veg_values)]
@@ -167,7 +176,7 @@ for area in study_areas.itertuples():
     total_all = len(x)
 
     # Fit RF on all data for this area (used for PDP computation)
-    rf = RandomForestClassifier(n_estimators=100, random_state=42)
+    rf = RandomForestClassifier(**RF_PARAMS)
     rf.fit(x, y)
 
     for feature in feature_cols:
@@ -218,8 +227,7 @@ plt.rcParams.update({'font.family': 'Times New Roman', 'font.size': 28})
 #   - Blue bars: selection ratio per bin (SR ≥ 1 → vegetation prefers that range)
 #   - Red dashed line at SR = 1 (no selection)
 #   - Orange line: PDP vegetation probability (right axis)
-#   - Sample counts annotated in each bar (n < 10 = light blue = unreliable)
-MIN_SAMPLES = 10  # minimum bin sample size for reliable SR estimation
+#   - Sample counts annotated in each bar (n < MIN_SAMPLES = light blue = unreliable)
 n_areas     = len(area_names)
 n_cols_fig  = min(3, n_areas)
 n_rows_fig  = int(np.ceil(n_areas / n_cols_fig))

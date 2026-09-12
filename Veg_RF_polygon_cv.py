@@ -26,7 +26,7 @@ For each study area the script:
 
 Vegetation encoding: 1 = vegetation, 2 = non-vegetation (in rasters and training data)
 
-Requires: rasterio, scikit-learn, geopandas, fiona
+Requires: rasterio, scikit-learn, geopandas, fiona, PyYAML
 """
 
 import pandas as pd
@@ -41,14 +41,30 @@ from sklearn.metrics import classification_report
 from pathlib import Path
 import matplotlib.pyplot as plt
 
-# Maximum number of CV folds; automatically reduced if fewer polygons exist
-N_FOLDS = 5
+from config_utils import load_config, resolve_path
 
-shp_path = "C:\TEMP\Vanessa_Henriksson\Data\proglacial_outlines.shp"
-gdb = r"C:\TEMP\Vanessa_Henriksson\Proglacial_outline\training_data.gdb"
+cfg = load_config()
+
+# Maximum number of CV folds; automatically reduced if fewer polygons exist
+N_FOLDS = cfg.cross_validation.polygon_cv_folds
+RF_PARAMS = dict(
+    n_estimators=cfg.random_forest.vegetation_classifier.n_estimators,
+    max_depth=cfg.random_forest.vegetation_classifier.max_depth,
+    min_samples_leaf=cfg.random_forest.vegetation_classifier.min_samples_leaf,
+    random_state=cfg.random_state,
+    n_jobs=-1,
+)
+TEST_SIZE = cfg.cross_validation.random_split_test_size
+EXTERNAL_VALIDATION_AREAS = tuple(cfg.study_areas.external_validation_areas)
+
+shp_path = resolve_path(cfg, cfg.paths.outlines_shp)
+gdb = resolve_path(cfg, cfg.paths.training_gdb)
+ext_gdb = resolve_path(cfg, cfg.paths.external_test_gdb)
+outputs_1m_dir = resolve_path(cfg, cfg.paths.outputs_1m)
+predicted_veg_polygon_cv_dir = Path(resolve_path(cfg, cfg.paths.predicted_vegetation_polygon_cv))
 
 study_areas = gpd.read_file(shp_path)
-study_areas = study_areas.drop(index=[12, 14])  # remove areas not included in analysis
+study_areas = study_areas.drop(index=cfg.study_areas.exclude_indices)  # remove areas not included in analysis
 
 # Storage for metrics from the three validation approaches
 results_random = []      # random 70/30 split metrics
@@ -57,7 +73,7 @@ results_external = []    # external validation metrics (Suottas, Vartas)
 
 for area in study_areas.itertuples():
     area_name = area.Glacier_na
-    ortho_fp = f"C:\TEMP\Vanessa_Henriksson\Data\Python\Outputs\{area_name}\{area_name}_ortho_clip.tif"
+    ortho_fp = f"{outputs_1m_dir}/{area_name}/{area_name}_ortho_clip.tif"
 
     # Open the clipped 4-band orthophoto for this area
     ortho_raster = rasterio.open(ortho_fp)
@@ -127,15 +143,9 @@ for area in study_areas.itertuples():
     # the two validation strategies can be directly compared.
     print("\n── Random Split ──")
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.3, random_state=42, stratify=y
+        X, y, test_size=TEST_SIZE, random_state=cfg.random_state, stratify=y
     )
-    rf_random = RandomForestClassifier(
-        n_estimators=300,
-        max_depth=20,
-        min_samples_leaf=10,
-        random_state=42,
-        n_jobs=-1
-    )
+    rf_random = RandomForestClassifier(**RF_PARAMS)
     rf_random.fit(X_train, y_train)
     y_pred_random = rf_random.predict(X_test)
     print(classification_report(y_test, y_pred_random))
@@ -174,13 +184,7 @@ for area in study_areas.itertuples():
         print(f"  Fold {fold + 1}: {len(test_polygons)} test polygons, "
               f"{len(test_idx)} test pixels")
 
-        rf_fold = RandomForestClassifier(
-            n_estimators=300,
-            max_depth=20,
-            min_samples_leaf=10,
-            random_state=42,
-            n_jobs=-1
-        )
+        rf_fold = RandomForestClassifier(**RF_PARAMS)
         rf_fold.fit(X_tr, y_tr)
         y_pred_fold = rf_fold.predict(X_te)
         fold_reports.append(
@@ -218,13 +222,7 @@ for area in study_areas.itertuples():
     # ── Final model trained on ALL training data ───────────────────────────────
     # Cross-validation is only for evaluation; the actual vegetation map is
     # produced by a model trained on the complete labelled dataset.
-    rf_final = RandomForestClassifier(
-        n_estimators=300,
-        max_depth=20,
-        min_samples_leaf=10,
-        random_state=42,
-        n_jobs=-1
-    )
+    rf_final = RandomForestClassifier(**RF_PARAMS)
     rf_final.fit(X, y)
 
     # ── Predict the full raster in memory-efficient chunks ────────────────────
@@ -247,14 +245,11 @@ for area in study_areas.itertuples():
         "count": 1,       # single-band output
         "dtype": "int32",
         "compress": "lzw",
-        "nodata": -9999
+        "nodata": cfg.nodata_value
     })
 
     # Save to a separate folder so it does not overwrite Predicted_vegetation/
-    output_path = Path(
-        f"C:\TEMP\Vanessa_Henriksson\Data\Python\Outputs"
-        f"\Predicted_vegetation_polygon_cv\{area_name}_predicted_vegetation.tif"
-    )
+    output_path = predicted_veg_polygon_cv_dir / f"{area_name}_predicted_vegetation.tif"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with rasterio.open(output_path, "w", **meta) as dst:
         dst.write(classified_ortho.astype("int32"), 1)
@@ -265,8 +260,7 @@ for area in study_areas.itertuples():
     # These two areas were withheld from training entirely.
     # External test polygons (with known Category labels) are used to assess
     # how well the model generalises to new, unseen proglacial areas.
-    ext_gdb = r"C:\TEMP\Vanessa_Henriksson\Proglacial_outline\external_test_data.gdb"
-    if area_name in ("Suottas", "Vartas"):
+    if area_name in EXTERNAL_VALIDATION_AREAS:
         df_ext = gpd.read_file(filename=ext_gdb, layer=area_name).dropna(subset=["Category"])
         y_true_ext, y_pred_ext = [], []
         with rasterio.open(output_path) as classified_raster:
@@ -276,9 +270,9 @@ for area in study_areas.itertuples():
                 # match the raster encoding (1 = veg, 2 = non-veg)
                 true_label = 1 if row["Category"] == 1 else 2
                 try:
-                    out_img, _ = mask(classified_raster, geom, crop=True, filled=True, nodata=-9999)
+                    out_img, _ = mask(classified_raster, geom, crop=True, filled=True, nodata=cfg.nodata_value)
                     pixels = out_img[0].flatten()
-                    pixels = pixels[pixels != -9999]  # exclude nodata pixels
+                    pixels = pixels[pixels != cfg.nodata_value]  # exclude nodata pixels
                     if pixels.size == 0:
                         continue
                     y_pred_ext.append(pixels)
@@ -310,7 +304,7 @@ for area in study_areas.itertuples():
             print(f"No valid external test pixels found for {area_name}.")
 
 # ── Export metrics to CSV ──────────────────────────────────────────────────────
-out_dir = Path(r"C:\TEMP\Vanessa_Henriksson\Data\Python\Outputs\Predicted_vegetation_polygon_cv")
+out_dir = predicted_veg_polygon_cv_dir
 out_dir.mkdir(parents=True, exist_ok=True)
 
 df_random = pd.DataFrame(results_random)

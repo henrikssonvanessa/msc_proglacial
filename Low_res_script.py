@@ -7,32 +7,37 @@ This script produces the 20 m dataset used by rf_vegetation_20m.py and the
 but operates at coarser resolution and adds snow cover as an additional variable.
 
 For each study area:
-  1. resample_clip_fill_dem — resamples the existing 1 m DEM to 20 m using
-     bilinear interpolation, clips and fills sinks
+  1. resample_clip_fill_dem — resamples the existing 1 m DEM to the target
+     resolution using bilinear interpolation, clips and fills sinks
   2. calculate_variables    — derives slope, aspect (sin/cos), hillshade,
-     landforms (search radius scaled to 20 m), distance, and curvature at 20 m
+     landforms (search radius scaled to the target resolution), distance, and
+     curvature
   3. sample_areas_lowres    — aggregates the 0.4 m binary vegetation raster to
-     20 m (vegetation fraction), applies a 0.3 threshold to create a 20 m binary
-     classification, then creates stratified sample points and extracts all
-     terrain variables + TRI + SWI + snow cover at those locations
+     the target resolution (vegetation fraction), applies a threshold to create
+     a binary classification, then creates stratified sample points and
+     extracts all terrain variables + TRI + SWI + snow cover at those locations
 
 Key difference from 1 m pipeline:
   - Snow cover: a Sentinel-2-derived snow cover fraction raster is added as an
     extra predictor. High snow cover in the growing season limits vegetation
-    establishment. TRI and SWI are loaded from pre-computed 20 m rasters rather
+    establishment. TRI and SWI are loaded from pre-computed rasters rather
     than re-derived from the DEM.
-  - Vegetation fraction threshold: a cell is classified as "vegetated" if ≥ 30%
-    of its sub-pixels (at 0.4 m) were classified as vegetation.
-  - Sample size is dynamic: 50% of the smaller class, capped at 500 per class.
+  - Vegetation fraction threshold: a cell is classified as "vegetated" if at
+    least veg_fraction_threshold of its sub-pixels (at 0.4 m) were classified
+    as vegetation.
+  - Sample size is dynamic (see config: low_res.sample_fraction / sample_min_per_class /
+    sample_max_per_class).
 
-Outputs are written to: Data/Python/Outputs_20m/{area_name}/Geodiversity/
+Outputs are written to: {paths.outputs_20m}/{area_name}/Geodiversity/
 
-Requires: arcpy (ArcGIS Pro with Spatial Analyst and Image Analyst extensions)
+All paths, the target resolution, the vegetation threshold, the snow-file
+lookup, the geomorphon search radius, and the sampling settings are read
+from config.yaml.
+
+Requires: arcpy (ArcGIS Pro with Spatial Analyst and Image Analyst extensions), PyYAML
 """
 
 import os
-os.chdir(r"C:\TEMP\Vanessa_Henriksson")
-print(os.getcwd())
 
 import math
 import arcpy
@@ -42,51 +47,38 @@ import pandas as pd
 import geopandas as gpd
 from pathlib import Path
 from arcgis_functions import *
-from NDVI_functions import *
-from variable_functions import *
+
+from config_utils import load_config, resolve_path
+
+cfg = load_config()
+os.chdir(cfg.paths.base_dir)
+print(os.getcwd())
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
-TARGET_RESOLUTION  = 20    # output pixel size in metres
-VEG_THRESHOLD      = 0.3   # minimum vegetation fraction to classify a 20 m cell as vegetated
-SNOW_DIR           = r"C:\TEMP\Vanessa_Henriksson\Data\Snow_data"
-TRI_SWI_DIR        = r"C:\TEMP\Vanessa_Henriksson\Data\DEM\TRI_SWI_20m"
-BASE_DIR           = r"C:\TEMP\Vanessa_Henriksson"
+TARGET_RESOLUTION = cfg.low_res.target_resolution    # output pixel size in metres
+VEG_THRESHOLD     = cfg.low_res.veg_fraction_threshold  # min vegetation fraction to classify a cell as vegetated
+SNOW_DIR          = resolve_path(cfg, cfg.paths.snow_cover_dir)
+TRI_SWI_DIR       = resolve_path(cfg, cfg.paths.tri_swi_20m_dir)
+BASE_DIR          = cfg.paths.base_dir
+ARCGIS_TOOLBOX_PATH = cfg.paths.arcgis_toolbox_data_management
+GLACIER_POLYGON_SCRATCH_PATH = resolve_path(cfg, cfg.paths.glacier_polygon_scratch_gdb)
+GEOMORPHON_SEARCH_RADIUS_MULTIPLIER = cfg.terrain_variables.geomorphon_search_radius_multiplier
+OUTPUTS_1M_DIR    = cfg.paths.outputs_1m
+PREDICTED_VEGETATION_DIR = resolve_path(cfg, cfg.paths.predicted_vegetation_1m)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Lookup: which Sentinel-2 snow cover tile covers each study area
 # Snow cover was derived from multi-temporal S2 composites at 20 m resolution
-SNOW_FILE_LOOKUP = {
-    # T33WXQ tile (southern areas)
-    "Suottas":              "T33WXQ_snow_cover.tif",
-    "Vartas":               "T33WXQ_snow_cover.tif",
-    "Mikka":                "T33WXQ_snow_cover.tif",
-    "Ruotes":               "T33WXQ_snow_cover.tif",
-    "Pårte":                "T33WXQ_snow_cover.tif",
-    # T33WXR tile (northern areas)
-    "Kårsa":                "T33WXR_snow_cover.tif",
-    "Riuko":                "T33WXR_snow_cover.tif",
-    "Gallan":               "T33WXR_snow_cover.tif",
-    "Unna_Räita":           "T33WXR_snow_cover.tif",
-    "Vaktpost":             "T33WXR_snow_cover.tif",
-    "Storglaciären":        "T33WXR_snow_cover.tif",
-    "Isfall":               "T33WXR_snow_cover.tif",
-    "Ballinriehppe_II_III": "T33WXR_snow_cover.tif",
-    "Rabots":               "T33WXR_snow_cover.tif",
-    # Areas with individual snow cover files
-    "Stuorra":              "Stuorra_snow_cover.tif",
-    "Helags":               "Helags_snow_cover.tif",
-}
+SNOW_FILE_LOOKUP = vars(cfg.snow_file_lookup)
 
-arcpy.env.overwriteOutput = True
-
-shp_path    = "Data/proglacial_outlines.shp"
-glacier_shp = "Data/glacier_polygon.shp"
+shp_path    = cfg.paths.outlines_shp
+glacier_shp = cfg.paths.glacier_shp
 
 study_areas = gpd.read_file(shp_path)
-study_areas = study_areas.drop(index=[12, 14])
+study_areas = study_areas.drop(index=cfg.study_areas.exclude_indices)
 
 # Merge study areas with sun position from lookup table (needed for hillshade)
-lookup = pd.read_csv("Data/Python/lookup_table_gd.csv")
+lookup = pd.read_csv(cfg.paths.lookup_table_gd)
 studarea_merge = study_areas.merge(
     lookup,
     left_on="Glacier_na",
@@ -95,13 +87,15 @@ studarea_merge = study_areas.merge(
 )
 
 
-def calculate_variables(area_name, geodiv_out_dir, merged_dem_path, sun_azim, sun_alt, area_shp, glacier_shp, target_resolution=20):
+def calculate_variables(area_name, geodiv_out_dir, merged_dem_path, sun_azim, sun_alt, area_shp, glacier_shp,
+                        glacier_polygon_scratch_path, target_resolution=20, geomorphon_search_radius_multiplier=3):
     """
-    Derive terrain variables from the 20 m resampled DEM.
+    Derive terrain variables from the resampled DEM.
 
     Identical to the 1 m version in High_res_script.py except:
-      - Geomorphon landform search radius scales with resolution (target_resolution * 3)
-        so the neighbourhood used for landform classification covers a comparable
+      - Geomorphon landform search radius scales with resolution
+        (target_resolution * geomorphon_search_radius_multiplier) so the
+        neighbourhood used for landform classification covers a comparable
         physical extent at coarser pixel sizes.
 
     Variables derived: slope, aspect (sin/cos), hillshade, landforms, distance
@@ -111,12 +105,15 @@ def calculate_variables(area_name, geodiv_out_dir, merged_dem_path, sun_azim, su
     ----------
     area_name        : str   Glacier name
     geodiv_out_dir   : str   Output directory
-    merged_dem_path  : str   Path to the resampled 20 m DEM
+    merged_dem_path  : str   Path to the resampled DEM
     sun_azim         : float Sun azimuth at image acquisition (degrees)
     sun_alt          : float Sun altitude at image acquisition (degrees)
     area_shp         : str   Single-area shapefile path
     glacier_shp      : str   Glacier polygon shapefile path
-    target_resolution: int   Pixel size in metres (default 20)
+    glacier_polygon_scratch_path : str  Scratch feature class path for the
+                             per-area glacier polygon selection
+    target_resolution: int   Pixel size in metres
+    geomorphon_search_radius_multiplier : int  Search radius (m) = target_resolution * multiplier
     """
     merged_dem = Raster(merged_dem_path)
 
@@ -162,18 +159,19 @@ def calculate_variables(area_name, geodiv_out_dir, merged_dem_path, sun_azim, su
     print("  Hillshade")
 
     # Geomorphon landforms: search radius scales with resolution
-    # (3× the pixel size) so the neighbourhood is physically comparable
-    # to the 1 m analysis which used a 3 m search radius
+    # (target_resolution × multiplier) so the neighbourhood is physically
+    # comparable to the 1 m analysis
     Geomorp_MHM_1 = f"{geodiv_out_dir}/{area_name}_landforms.tif"
     Geomorphon_Landforms = Geomorp_MHM_1
     Output_geomorphons_raster = f"{geodiv_out_dir}/{area_name}_geomorph.tif"
+    geomorphon_search_radius = target_resolution * geomorphon_search_radius_multiplier
     with arcpy.EnvManager(mask=area_shp, snapRaster=merged_dem_path):
-        Geomorp_MHM_1 = arcpy.sa.GeomorphonLandforms(merged_dem, Output_geomorphons_raster, 1, "METERS", target_resolution * 3, None, "METER")
+        Geomorp_MHM_1 = arcpy.sa.GeomorphonLandforms(merged_dem, Output_geomorphons_raster, 1, "METERS", geomorphon_search_radius, None, "METER")
         Geomorp_MHM_1.save(Geomorphon_Landforms)
     print("  Landforms")
 
     # Select glacier polygon for this area (for distance calculation)
-    glacier_polygon_Select = r"C:\TEMP\Vanessa_Henriksson\RD_GIS\RD_GIS.gdb\glacier_polygon_Select"
+    glacier_polygon_Select = glacier_polygon_scratch_path
     arcpy.analysis.Select(in_features=glacier_shp, out_feature_class=glacier_polygon_Select, where_clause=f"Glacier_na = '{area_name}'")
 
     # Distance from glacier: chronosequence proxy
@@ -198,7 +196,7 @@ def calculate_variables(area_name, geodiv_out_dir, merged_dem_path, sun_azim, su
     print("  Curvature")
 
 
-def resample_clip_fill_dem(area_shp, area_name, geodiv_out_dir, target_resolution):
+def resample_clip_fill_dem(area_shp, area_name, geodiv_out_dir, target_resolution, outputs_1m_dir):
     """
     Resample the existing 1 m DEM to target_resolution metres, then clip and fill.
 
@@ -210,15 +208,17 @@ def resample_clip_fill_dem(area_shp, area_name, geodiv_out_dir, target_resolutio
     ----------
     area_shp         : str  Single-area shapefile path
     area_name        : str  Glacier name
-    geodiv_out_dir   : str  Output directory for 20 m geodiversity products
+    geodiv_out_dir   : str  Output directory for the low-resolution geodiversity products
     target_resolution: int  Target pixel size in metres
+    outputs_1m_dir   : str  Path to the 1 m outputs directory (config: paths.outputs_1m),
+                            used to locate the existing merged 1 m DEM
 
     Returns
     -------
     str  Path to the resampled DEM raster
     """
     # Path to the merged 1 m DEM created in the 1 m pipeline
-    merged_dem_path = os.path.join(BASE_DIR, f"Data/Python/Outputs/{area_name}/Geodiversity/{area_name}_DEM.tif")
+    merged_dem_path = os.path.join(outputs_1m_dir, f"{area_name}/Geodiversity/{area_name}_DEM.tif")
 
     # Resample to target resolution using bilinear interpolation
     resampled_dem_path = os.path.join(geodiv_out_dir, f"{area_name}_DEM_{target_resolution}m.tif")
@@ -245,42 +245,52 @@ def resample_clip_fill_dem(area_shp, area_name, geodiv_out_dir, target_resolutio
     return resampled_dem_path
 
 
-def sample_areas_lowres(geodiv_out_dir, area_name, target_resolution, resampled_dem_path, snow_file_path, tri_file_path, swi_file_path, veg_threshold=0.3):
+def sample_areas_lowres(geodiv_out_dir, area_name, target_resolution, resampled_dem_path, snow_file_path,
+                        tri_file_path, swi_file_path, predicted_vegetation_dir, arcgis_toolbox_path,
+                        veg_threshold=0.3, sample_fraction=0.50, sample_min_per_class=50,
+                        sample_max_per_class=500):
     """
-    Create a binary 20 m vegetation raster, then extract all predictor values.
+    Create a binary low-resolution vegetation raster, then extract all predictor values.
 
     This function handles the special aggregation logic required to convert the
-    high-resolution (0.4 m) binary vegetation raster into a 20 m classification:
+    high-resolution (0.4 m) binary vegetation raster into a coarser classification:
 
     Step 1: Recode the binary veg raster (1=veg, 2=non-veg) to (1=veg, 0=non-veg)
-    Step 2: Aggregate (MEAN) to 20 m → each cell value = vegetation fraction (0–1)
-            (cell_factor = 20 / 0.4 = 50: each 20 m cell contains 50×50 = 2500
-            sub-pixels that are averaged)
-    Step 3: Apply threshold: fraction ≥ 0.3 → classified as vegetation (1),
+    Step 2: Aggregate (MEAN) to target_resolution → each cell value = vegetation
+            fraction (0–1) (cell_factor = target_resolution / 0.4)
+    Step 3: Apply threshold: fraction >= veg_threshold → classified as vegetation (1),
             else non-vegetation (2)
 
-    TRI, SWI, and snow cover are loaded directly from pre-computed 20 m rasters
+    TRI, SWI, and snow cover are loaded directly from pre-computed rasters
     rather than derived from the DEM, because they were computed by SAGA GIS
-    on the 20 m DEM using algorithms not available in ArcPy.
+    on the target-resolution DEM using algorithms not available in ArcPy.
 
     Sampling:
-      - Stratified by vegetation class, 50% of the smaller class, max 500
+      - Stratified by vegetation class, sample_fraction of the smaller class,
+        clipped between sample_min_per_class and sample_max_per_class
       - Minimum distance = 1 × target_resolution to reduce spatial autocorrelation
 
     Parameters
     ----------
     geodiv_out_dir     : str   Output directory
     area_name          : str   Glacier name
-    target_resolution  : int   Pixel size in metres (20)
-    resampled_dem_path : str   Path to the 20 m DEM (snap raster reference)
+    target_resolution  : int   Pixel size in metres
+    resampled_dem_path : str   Path to the resampled DEM (snap raster reference)
     snow_file_path     : str   Path to the snow cover raster for this area
-    tri_file_path      : str   Path to the pre-computed 20 m TRI raster
-    swi_file_path      : str   Path to the pre-computed 20 m SWI raster
-    veg_threshold      : float Minimum vegetation fraction for "vegetated" class (default 0.3)
+    tri_file_path      : str   Path to the pre-computed TRI raster
+    swi_file_path      : str   Path to the pre-computed SWI raster
+    predicted_vegetation_dir : str  Directory holding the 0.4 m predicted vegetation
+                               rasters (config: paths.predicted_vegetation_1m)
+    arcgis_toolbox_path: str   Path to ArcGIS Pro's Data Management Tools.tbx
+                               (config: paths.arcgis_toolbox_data_management)
+    veg_threshold      : float Minimum vegetation fraction for "vegetated" class
+    sample_fraction    : float Fraction of the smaller class to sample
+    sample_min_per_class : int Minimum samples per class
+    sample_max_per_class : int Maximum samples per class
     """
     target_resolution = int(target_resolution)
 
-    arcpy.ImportToolbox(r"c:\program files\arcgis\pro\Resources\ArcToolbox\toolboxes\Data Management Tools.tbx")
+    arcpy.ImportToolbox(arcgis_toolbox_path)
     arcpy.CheckOutExtension("ImageExt")
     arcpy.CheckOutExtension("ImageAnalyst")
     arcpy.env.overwriteOutput = True
@@ -288,16 +298,15 @@ def sample_areas_lowres(geodiv_out_dir, area_name, target_resolution, resampled_
     variables_folder = os.path.abspath(str(geodiv_out_dir))
 
     # Step 1: Recode 0.4 m vegetation raster: 1=veg → 1, 2=non-veg → 0
-    veg_raster_hires = os.path.join(BASE_DIR, "Data", "Python", "Outputs", "Predicted_vegetation",
-                                    f"{area_name}_predicted_vegetation.tif")
+    veg_raster_hires = os.path.join(predicted_vegetation_dir, f"{area_name}_predicted_vegetation.tif")
     veg_binary = os.path.join(variables_folder, f"{area_name}_veg_binary.tif")
     with arcpy.EnvManager(snapRaster=resampled_dem_path):
         binary = arcpy.sa.Con(arcpy.Raster(veg_raster_hires) == 1, 1, 0)
         binary.save(veg_binary)
 
     # Step 2: Aggregate from 0.4 m to target resolution using mean
-    # cell_factor = target_res / native_res = 20 / 0.4 = 50
-    # The result is vegetation fraction per 20 m cell (0.0 – 1.0)
+    # cell_factor = target_res / native_res (native ortho resolution is 0.4 m)
+    # The result is vegetation fraction per target-resolution cell (0.0 – 1.0)
     cell_factor = int(target_resolution / 0.4)
     veg_fraction = os.path.join(variables_folder, f"{area_name}_veg_fraction.tif")
     with arcpy.EnvManager(snapRaster=resampled_dem_path):
@@ -306,11 +315,11 @@ def sample_areas_lowres(geodiv_out_dir, area_name, target_resolution, resampled_
 
     print(f"  Vegetation fraction raster created at {target_resolution}m.")
 
-    # Step 3: Apply threshold — fraction ≥ VEG_THRESHOLD → 1 (veg), else → 2 (non-veg)
+    # Step 3: Apply threshold — fraction >= veg_threshold → 1 (veg), else → 2 (non-veg)
     veg_raster_lowres = os.path.join(variables_folder, f"{area_name}_predicted_vegetation_{target_resolution}m.tif")
     with arcpy.EnvManager(snapRaster=resampled_dem_path):
-        binary_20m = arcpy.sa.Con(arcpy.Raster(veg_fraction) >= veg_threshold, 1, 2)
-        binary_20m.save(veg_raster_lowres)
+        binary_lowres = arcpy.sa.Con(arcpy.Raster(veg_fraction) >= veg_threshold, 1, 2)
+        binary_lowres.save(veg_raster_lowres)
 
     print(f"  Vegetation threshold ({veg_threshold}) applied — binary raster created.")
 
@@ -320,12 +329,12 @@ def sample_areas_lowres(geodiv_out_dir, area_name, target_resolution, resampled_
     n_nonveg = int(np.sum(raster_array == 2))
     n_min    = min(n_veg, n_nonveg)
 
-    SAMPLE_FRACTION = 0.50
-    # Clip sample size between 50 and 500 per class
-    n_samples = int(np.clip(n_min * SAMPLE_FRACTION, 50, 500))
+    # Clip sample size between sample_min_per_class and sample_max_per_class
+    n_samples = int(np.clip(n_min * sample_fraction, sample_min_per_class, sample_max_per_class))
 
     print(f"  Veg pixels: {n_veg}, Non-veg pixels: {n_nonveg}")
-    print(f"  Sampling {n_samples} per class ({SAMPLE_FRACTION*100:.0f}% of smaller class, min=50, max=500)")
+    print(f"  Sampling {n_samples} per class ({sample_fraction*100:.0f}% of smaller class, "
+          f"min={sample_min_per_class}, max={sample_max_per_class})")
 
     # Collect terrain variable rasters from the output folder
     # Exclude intermediate rasters that are not predictors
@@ -344,7 +353,7 @@ def sample_areas_lowres(geodiv_out_dir, area_name, target_resolution, resampled_
         if file.endswith(".tif") and file not in exclude:
             variables_files_list.append(Raster(os.path.join(variables_folder, file)))
 
-    # Add TRI, SWI and snow cover — already at 20 m, loaded directly from source
+    # Add TRI, SWI and snow cover — loaded directly from source
     variables_files_list.append(Raster(tri_file_path))
     variables_files_list.append(Raster(swi_file_path))
     variables_files_list.append(Raster(snow_file_path))
@@ -375,17 +384,17 @@ def sample_areas_lowres(geodiv_out_dir, area_name, target_resolution, resampled_
     print("  Sampling complete.")
 
 
-# ── Main loop: process all study areas at 20 m ────────────────────────────────
+# ── Main loop: process all study areas at the target resolution ───────────────
 for area in studarea_merge.itertuples():
     area_name = area.Glacier_na
     sun_azim  = area.sun_azim
     sun_alt   = area.sun_alt
 
-    # Output directory for 20 m products (separate from 1 m outputs)
-    geodiv_out_dir = Path(BASE_DIR) / f"Data/Python/Outputs_{TARGET_RESOLUTION}m/{area_name}/Geodiversity"
+    # Output directory for low-resolution products (separate from 1 m outputs)
+    geodiv_out_dir = Path(cfg.paths.outputs_20m) / f"{area_name}/Geodiversity"
     geodiv_out_dir.mkdir(parents=True, exist_ok=True)
 
-    select_area_shp_path = select_area_shp(area_name, shp_path)
+    select_area_shp_path = select_area_shp(area_name, shp_path, OUTPUTS_1M_DIR)
 
     if area_name not in SNOW_FILE_LOOKUP:
         print(f"  ⚠ No snow file defined for {area_name} — skipping.")
@@ -398,21 +407,27 @@ for area in studarea_merge.itertuples():
     print(f"\nProcessing: {area_name}")
     print(f"  Snow file: {SNOW_FILE_LOOKUP[area_name]}")
 
-    # Step 1: Resample existing 1 m DEM to 20 m, clip and fill sinks
+    # Step 1: Resample existing 1 m DEM to the target resolution, clip and fill sinks
     resampled_dem_path = resample_clip_fill_dem(
         select_area_shp_path, area_name,
-        str(geodiv_out_dir), TARGET_RESOLUTION
+        str(geodiv_out_dir), TARGET_RESOLUTION, OUTPUTS_1M_DIR
     )
     print(f"  DEM resampled to {TARGET_RESOLUTION}m, clipped and filled.")
 
-    # Step 2: Derive terrain variables at 20 m
+    # Step 2: Derive terrain variables at the target resolution
     calculate_variables(area_name, str(geodiv_out_dir), resampled_dem_path,
-                        sun_azim, sun_alt, select_area_shp_path, glacier_shp, TARGET_RESOLUTION)
+                        sun_azim, sun_alt, select_area_shp_path, glacier_shp,
+                        GLACIER_POLYGON_SCRATCH_PATH, TARGET_RESOLUTION,
+                        GEOMORPHON_SEARCH_RADIUS_MULTIPLIER)
     print("  Variables calculated.")
 
     # Step 3: Aggregate vegetation, apply threshold, sample all variables
     sample_areas_lowres(str(geodiv_out_dir), area_name,
                         TARGET_RESOLUTION, resampled_dem_path,
                         snow_file_path, tri_file_path, swi_file_path,
-                        veg_threshold=VEG_THRESHOLD)
+                        PREDICTED_VEGETATION_DIR, ARCGIS_TOOLBOX_PATH,
+                        veg_threshold=VEG_THRESHOLD,
+                        sample_fraction=cfg.low_res.sample_fraction,
+                        sample_min_per_class=cfg.low_res.sample_min_per_class,
+                        sample_max_per_class=cfg.low_res.sample_max_per_class)
     print("  Study area sampled.")

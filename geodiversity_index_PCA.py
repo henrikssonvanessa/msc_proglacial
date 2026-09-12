@@ -51,8 +51,6 @@ Requires: rasterio, scikit-learn (PCA), numpy
 """
 
 import os
-os.chdir(r"C:\TEMP\Vanessa_Henriksson")
-print(os.getcwd())
 
 import numpy as np
 import pandas as pd
@@ -67,14 +65,20 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 
+from config_utils import load_config, resolve_path
+
+cfg = load_config()
+os.chdir(cfg.paths.base_dir)
+print(os.getcwd())
+
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 RESOLUTIONS = {
-    '1m':  'Data/Python/Outputs',
-    '20m': 'Data/Python/Outputs_20m',
+    '1m':  cfg.paths.outputs_1m,
+    '20m': cfg.paths.outputs_20m,
 }
 
 # Variables included in the geodiversity index
-FEATURE_COLS = ['Curvature', 'Landforms', 'TRI', 'SWI']
+FEATURE_COLS = cfg.geodiversity.pca_feature_cols
 
 # Filename templates — {area} is replaced with the glacier name
 RASTER_NAMES = {
@@ -84,11 +88,14 @@ RASTER_NAMES = {
     'SWI':        '{area}_SWI.tif'
 }
 
-NODATA_VAL = -9999
+NODATA_VAL = cfg.nodata_value
+SD_MULTIPLIER_WIDE, SD_MULTIPLIER_NARROW = cfg.classification.sd_multipliers
+CLASS_LABELS = cfg.classification.labels
+TRI_SWI_20M_DIR = resolve_path(cfg, cfg.paths.tri_swi_20m_dir)
 # ─────────────────────────────────────────────────────────────────────────────
 
-study_areas = gpd.read_file("Data/proglacial_outlines.shp")
-study_areas = study_areas.drop(index=[12, 14])
+study_areas = gpd.read_file(cfg.paths.outlines_shp)
+study_areas = study_areas.drop(index=cfg.study_areas.exclude_indices)
 area_names  = [area.Glacier_na for area in study_areas.itertuples()]
 
 
@@ -139,11 +146,11 @@ def get_raster_path(res_folder, area_name, feature):
     TRI and SWI at 20 m were pre-computed by SAGA GIS and use a different
     naming convention and directory from the ArcPy-derived 1 m outputs.
     """
-    if res_folder.endswith("Outputs_20m"):
+    if res_folder == RESOLUTIONS['20m']:
         if feature == 'TRI':
-            return rf"C:\TEMP\Vanessa_Henriksson\Data\DEM\TRI_SWI_20m\TIF_TRI_{area_name}_DEM_clip.tif"
+            return f"{TRI_SWI_20M_DIR}/TIF_TRI_{area_name}_DEM_clip.tif"
         elif feature == 'SWI':
-            return rf"C:\TEMP\Vanessa_Henriksson\Data\DEM\TRI_SWI_20m\TIF_SWI_{area_name}_DEM_fill.tif"
+            return f"{TRI_SWI_20M_DIR}/TIF_SWI_{area_name}_DEM_fill.tif"
 
     filename = RASTER_NAMES[feature].replace('{area}', area_name)
     return f"{res_folder}/{area_name}/Geodiversity/{filename}"
@@ -346,13 +353,13 @@ for res_label, res_folder in RESOLUTIONS.items():
 
     bounds = [
         -np.inf,
-        global_mean - 1.5 * global_std,
-        global_mean - 0.5 * global_std,
-        global_mean + 0.5 * global_std,
-        global_mean + 1.5 * global_std,
+        global_mean - SD_MULTIPLIER_WIDE * global_std,
+        global_mean - SD_MULTIPLIER_NARROW * global_std,
+        global_mean + SD_MULTIPLIER_NARROW * global_std,
+        global_mean + SD_MULTIPLIER_WIDE * global_std,
         np.inf
     ]
-    class_labels = ['Very low', 'Low', 'Medium', 'High', 'Very high']
+    class_labels = CLASS_LABELS
 
     print(f"\nGlobal Geoindex — mean: {global_mean:.3f}, std: {global_std:.3f}")
     print("Classification boundaries:")
@@ -370,7 +377,7 @@ for res_label, res_folder in RESOLUTIONS.items():
             'transform': area_transforms[area_name]['SWI'],  # aligned to SWI grid
             'dtype':     'float32',
             'count':     1,
-            'nodata':    -9999,
+            'nodata':    NODATA_VAL,
             'compress':  'lzw',
             'crs':       rasterio.crs.CRS.from_epsg(3006),
         })
@@ -379,7 +386,7 @@ for res_label, res_folder in RESOLUTIONS.items():
         classified = np.zeros(geoindex.shape, dtype=np.int16)
         for k in range(5):
             classified[(geoindex >= bounds[k]) & (geoindex < bounds[k+1])] = k + 1
-        classified[np.isnan(geoindex)] = -9999
+        classified[np.isnan(geoindex)] = NODATA_VAL
 
         # Save continuous index
         out_cont = Path(res_folder) / area_name / "Geodiversity" / \

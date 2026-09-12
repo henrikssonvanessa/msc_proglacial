@@ -32,8 +32,6 @@ Outputs
 """
 
 import os
-os.chdir(r"C:\TEMP\Vanessa_Henriksson")
-print(os.getcwd())
 
 import numpy as np
 import pandas as pd
@@ -46,24 +44,31 @@ import matplotlib
 matplotlib.use('Agg')  # non-interactive backend for saving figures without a display
 import matplotlib.pyplot as plt
 
+from config_utils import load_config, resolve_path
+
+cfg = load_config()
+os.chdir(cfg.paths.base_dir)
+print(os.getcwd())
+
 # ── CONFIG ────────────────────────────────────────────────────────────────────
-NODATA        = -9999
-SAMPLE_PIXELS = 200_000  # cap on pixels used for Spearman correlation (speed)
+NODATA        = cfg.nodata_value
+SAMPLE_PIXELS = cfg.stats.sample_pixels_cap  # cap on pixels used for Spearman correlation (speed)
+predicted_vegetation_dir = resolve_path(cfg, cfg.paths.predicted_vegetation_1m)
 # ─────────────────────────────────────────────────────────────────────────────
 
-study_areas = gpd.read_file("Data/proglacial_outlines.shp")
-study_areas = study_areas.drop(index=[12, 14])
+study_areas = gpd.read_file(cfg.paths.outlines_shp)
+study_areas = study_areas.drop(index=cfg.study_areas.exclude_indices)
 area_names  = [area.Glacier_na for area in study_areas.itertuples()]
 
-out_folder = Path("Data/Python/Outputs/Geo_veg_relation")
+out_folder = Path(cfg.paths.outputs_1m) / "Geo_veg_relation"
 out_folder.mkdir(parents=True, exist_ok=True)
 
 print("Running NDVI validation...")
 ndvi_rows = []  # accumulates one results dict per study area
 
 for area_name in area_names:
-    ndvi_path = f"Data/Python/Outputs/{area_name}/NDVI/{area_name}_NDVI_S2.tif"
-    veg_path  = f"Data/Python/Outputs/Predicted_vegetation/{area_name}_predicted_vegetation.tif"
+    ndvi_path = f"{cfg.paths.outputs_1m}/{area_name}/NDVI/{area_name}_NDVI_S2.tif"
+    veg_path  = f"{predicted_vegetation_dir}/{area_name}_predicted_vegetation.tif"
 
     if not Path(ndvi_path).exists():
         print(f"  ⚠ No NDVI found for {area_name} (tried: {ndvi_path})")
@@ -188,8 +193,8 @@ else:
 
     for ax, row in zip(axes, ndvi_rows):
         area_name = row['Area']
-        ndvi_path = f"Data/Python/Outputs/{area_name}/NDVI/{area_name}_NDVI_S2.tif"
-        veg_path  = f"Data/Python/Outputs/Predicted_vegetation/{area_name}_predicted_vegetation.tif"
+        ndvi_path = f"{cfg.paths.outputs_1m}/{area_name}/NDVI/{area_name}_NDVI_S2.tif"
+        veg_path  = f"{predicted_vegetation_dir}/{area_name}_predicted_vegetation.tif"
 
         # Re-load rasters to get pixel arrays for plotting
         with rasterio.open(ndvi_path) as src:
