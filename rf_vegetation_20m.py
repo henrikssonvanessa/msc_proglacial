@@ -291,3 +291,33 @@ print("Block CV metrics saved.")
 df_perm = pd.DataFrame(perm_veg_rows)
 df_perm.to_csv(csv_folder / "perm_importance_veg_recall.csv", index=False, encoding='utf-8-sig')
 print("Permutation importance (vegetation recall) saved.")
+
+# ── Comparison table: random split vs block CV side by side ───────────────────
+# Negative delta values indicate that the random split was optimistically biased
+# (inflated metrics due to spatial autocorrelation between train and test pixels).
+df_comp = df_random.drop(columns=["n_samples"]).rename(columns={
+    "accuracy":  "rs_accuracy",
+    "precision": "rs_precision",
+    "recall":    "rs_recall",
+    "f1":        "rs_f1",
+}).merge(
+    df_block.rename(columns={
+        "accuracy_mean":  "cv_accuracy_mean",  "accuracy_std":  "cv_accuracy_std",
+        "precision_mean": "cv_precision_mean", "precision_std": "cv_precision_std",
+        "recall_mean":    "cv_recall_mean",    "recall_std":    "cv_recall_std",
+        "f1_mean":        "cv_f1_mean",        "f1_std":        "cv_f1_std",
+    }),
+    on="area",
+    how="outer"
+)
+
+# Delta = block CV mean − random split (positive = block CV is higher than random split)
+df_comp["delta_accuracy"]  = (df_comp["cv_accuracy_mean"]  - df_comp["rs_accuracy"]).round(4)
+df_comp["delta_precision"] = (df_comp["cv_precision_mean"] - df_comp["rs_precision"]).round(4)
+df_comp["delta_recall"]    = (df_comp["cv_recall_mean"]    - df_comp["rs_recall"]).round(4)
+df_comp["delta_f1"]        = (df_comp["cv_f1_mean"]        - df_comp["rs_f1"]).round(4)
+
+df_comp.to_csv(csv_folder / "metrics_comparison.csv", index=False, encoding='utf-8-sig')
+print("Comparison table saved to metrics_comparison.csv")
+print("\nDelta columns = block_cv_mean − random_split  (negative means block CV is lower, "
+      "indicating the random split was optimistically biased)")

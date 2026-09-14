@@ -100,6 +100,7 @@ script(s) read it.
   - Random 70/30 train–test split
   - Polygon-based GroupKFold cross-validation (5 folds)
   - "External" validation with additional polygons (Suottas, Vartas)
+- Exports a `classification_results_comparison.csv` with the delta between polygon CV and random split, per area and class
 - Produce predicted vegetation rasters at 0.4 m resolution
 
 ### 2. Terrain Variable Calculation (`Variable_calculation.py`, `High_res_script.py`)
@@ -115,6 +116,7 @@ script(s) read it.
 ### 4. RF Prediction with Block Cross-Validation (`RF_block_test.py`, `rf_vegetation_20m.py`, `Selection_ratio.py`)
 - Spatial block cross-validation to account for autocorrelation (200 m blocks at 1 m resolution; 400 m at 20 m resolution — configurable)
 - Features: Landforms, Distance, Aspect (sin/cos), Elevation, Curvature, Hillshade, TRI, SWI (+ Snow cover at 20 m)
+- Also evaluates a random 70/30 split for comparison, and exports a `metrics_comparison.csv` with the delta between block CV and random split per area — a large negative delta flags optimistic bias in the random split
 - Permutation importance and partial dependence plots
 - Selection ratio analysis: compares observed vs. expected vegetation frequency across terrain variables
 - Combined Partial dependence plots for all RF models
