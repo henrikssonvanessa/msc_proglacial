@@ -67,7 +67,10 @@ WINDOW_SIZE = cfg.geodiversity.window_size   # pixels; at 1 m res = 10 m, at 20 
 NODATA_VAL  = cfg.nodata_value
 SD_MULTIPLIER_WIDE, SD_MULTIPLIER_NARROW = cfg.classification.sd_multipliers
 CLASS_LABELS = cfg.classification.labels
+TRI_SWI_1M_DIR = resolve_path(cfg, cfg.paths.tri_swi_1m_dir)
 TRI_SWI_20M_DIR = resolve_path(cfg, cfg.paths.tri_swi_20m_dir)
+TRI_FILENAME_1M = cfg.geodiversity.tri_filename_1m
+TRI_FILENAME_20M = cfg.geodiversity.tri_filename_20m
 # ─────────────────────────────────────────────────────────────────────────────
 
 study_areas = gpd.read_file(cfg.paths.outlines_shp)
@@ -114,12 +117,15 @@ def get_tri_path(res_folder, area_name):
     """
     Return the path to the TRI raster for a given area and resolution.
 
-    At 20 m resolution, TRI was pre-computed by SAGA GIS and stored in a
-    separate directory with a different naming convention.
+    TRI is not computed by this repo's scripts — it is loaded from
+    pre-computed rasters (e.g. generated manually in QGIS/SAGA) in a
+    dedicated directory per resolution (config: paths.tri_swi_1m_dir /
+    paths.tri_swi_20m_dir), each with its own filename convention
+    (config: geodiversity.tri_filename_1m / tri_filename_20m).
     """
     if res_folder == RESOLUTIONS['20m']:
-        return f"{TRI_SWI_20M_DIR}/TIF_TRI_{area_name}_DEM_clip.tif"
-    return f"{res_folder}/{area_name}/Geodiversity/{area_name}_TRI.tif"
+        return f"{TRI_SWI_20M_DIR}/{TRI_FILENAME_20M.format(area=area_name)}"
+    return f"{TRI_SWI_1M_DIR}/{TRI_FILENAME_1M.format(area=area_name)}"
 
 
 def count_unique_landforms(values, nodata_val=NODATA_VAL):

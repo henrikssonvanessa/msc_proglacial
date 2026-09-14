@@ -24,6 +24,7 @@ Approximately 16 proglacial areas in northern Sweden including Kårsa, Suottas, 
 | Sentinel-2 | 10–20 m | Bands B3 (Green), B4 (Red), B8 (NIR), B11 (SWIR), SCL |
 | DTM   | 1 m | Lantmäteriet Markhöjdmodell                           |
 | Snow cover | 20 m | Sentinel-2-derived snow cover fraction                |
+| TRI / SWI | 1 m & 20 m | Terrain Ruggedness Index / SAGA Wetness Index, generated manually (QGIS/SAGA) — not computed by any script in this repo |
 
 ## Configuration
 
@@ -75,6 +76,20 @@ script(s) read it.
 > `{area}_NDVI_S2.tif` rasters those scripts produced; if you need to
 > regenerate them from scratch for a new area, that preprocessing will need
 > to be reimplemented.
+>
+> **TRI/SWI:** neither the 1 m nor 20 m pipeline computes TRI or SWI —
+> both are generated externally (QGIS/SAGA) and read from
+> `paths.tri_swi_1m_dir` / `paths.tri_swi_20m_dir` in `config.yaml`, using
+> the filename patterns in `geodiversity.tri_filename_1m` /
+> `swi_filename_1m` / `tri_filename_20m` / `swi_filename_20m`. Generate
+> these before running `Variable_calculation.py`, `RF_block_test.py`,
+> `Selection_ratio.py`, or either geodiversity index script.
+>
+> **Predicted vegetation:** `Veg_RF_polygon_cv.py` is the only vegetation-
+> classification script in the repo, so its output at
+> `paths.predicted_vegetation_1m` is the single canonical vegetation raster
+> that every downstream step (terrain sampling, `geodiv_veg_all_areas.py`,
+> `ndvi_validation.py`) reads from.
 
 ## Workflow
 
@@ -89,7 +104,8 @@ script(s) read it.
 
 ### 2. Terrain Variable Calculation (`Variable_calculation.py`, `High_res_script.py`)
 - Mosaic and clip LiDAR DEM tiles per study area
-- Derive terrain variables via ArcPy Spatial Analyst: slope, aspect (sin/cos), curvature, hillshade, TRI, SWI, landforms, distance from glacier
+- Derive terrain variables via ArcPy Spatial Analyst: slope, aspect (sin/cos), curvature, hillshade, landforms, distance from glacier
+- TRI and SWI are *not* derived here — they are loaded from the externally-generated rasters described above
 
 ### 3. Low-Resolution Processing (`Low_res_script.py`)
 - Aggregate vegetation from 1 m to 20 m

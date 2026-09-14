@@ -208,8 +208,8 @@ def calculate_variables(area_name, geodiv_out_dir, merged_dem_path, sun_azim, su
 
 
 def sample_areas(geodiv_out_dir, area_name, merged_dem_path, arcgis_toolbox_path,
-                 predicted_vegetation_dir, sample_fraction=0.10, sample_max_per_class=2000,
-                 min_sample_distance_m=2):
+                 predicted_vegetation_dir, tri_file_path, swi_file_path, sample_fraction=0.10,
+                 sample_max_per_class=2000, min_sample_distance_m=2):
     """
     Create stratified sample points and extract terrain variable values at each point.
 
@@ -225,6 +225,10 @@ def sample_areas(geodiv_out_dir, area_name, merged_dem_path, arcgis_toolbox_path
       - All terrain variable rasters are then sampled at the selected point locations
         using NEAREST neighbour extraction.
 
+    TRI and SWI are not derived by this script — they are loaded directly from
+    pre-computed rasters (e.g. generated manually in QGIS/SAGA), the same way
+    Low_res_script.py loads them for the 20 m pipeline.
+
     The resulting shapefile ({area_name}_samples.shp) has one row per sample point
     with columns v_raster_1 ... v_raste_11 containing the terrain variable values.
     This file is the primary input for RF_block_test.py.
@@ -238,6 +242,10 @@ def sample_areas(geodiv_out_dir, area_name, merged_dem_path, arcgis_toolbox_path
                                  (config: paths.arcgis_toolbox_data_management)
     predicted_vegetation_dir : str  Directory holding the 0.4 m predicted vegetation
                                  rasters (config: paths.predicted_vegetation_1m)
+    tri_file_path        : str   Path to the pre-computed 1 m TRI raster
+                                 (config: paths.tri_swi_1m_dir + geodiversity.tri_filename_1m)
+    swi_file_path        : str   Path to the pre-computed 1 m SWI raster
+                                 (config: paths.tri_swi_1m_dir + geodiversity.swi_filename_1m)
     sample_fraction      : float Fraction of the smaller class to sample (config:
                                  high_res_sampling.sample_fraction)
     sample_max_per_class : int   Max samples per class (config: high_res_sampling.sample_max_per_class)
@@ -267,6 +275,10 @@ def sample_areas(geodiv_out_dir, area_name, merged_dem_path, arcgis_toolbox_path
     for file in variables_files:
         if file.endswith(".tif") and file not in exclude:
             variables_files_list.append(Raster(os.path.join(variables_folder, file)))
+
+    # Add TRI and SWI — loaded directly from the pre-computed source rasters
+    variables_files_list.append(Raster(tri_file_path))
+    variables_files_list.append(Raster(swi_file_path))
 
     # Resample vegetation from 0.4 m to 1 m using NEAREST (categorical data)
     # so it aligns exactly with the 1 m DEM-derived variables

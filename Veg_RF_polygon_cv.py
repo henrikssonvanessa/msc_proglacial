@@ -1,8 +1,12 @@
 """
-Step 3b — Random Forest vegetation classification with polygon-based cross-validation.
+Step 1 — Random Forest vegetation classification with polygon-based cross-validation.
 
-This script is an extension of Veg_RF.py that adds a spatially-aware validation
-strategy: polygon-based GroupKFold cross-validation (CV).
+This is the sole vegetation-classification script in this repository. It trains
+on 4-band orthophoto pixels sampled from training polygons, evaluates with both
+a random split and a spatially-aware polygon-based GroupKFold cross-validation
+(CV), then predicts the full-area binary vegetation raster used by every
+downstream step in the pipeline (terrain sampling, geodiversity-vegetation
+correlation, NDVI validation).
 
 Problem with random pixel splitting:
     Training polygons contain thousands of pixels, and nearby pixels are spatially
@@ -61,7 +65,7 @@ shp_path = resolve_path(cfg, cfg.paths.outlines_shp)
 gdb = resolve_path(cfg, cfg.paths.training_gdb)
 ext_gdb = resolve_path(cfg, cfg.paths.external_test_gdb)
 outputs_1m_dir = resolve_path(cfg, cfg.paths.outputs_1m)
-predicted_veg_polygon_cv_dir = Path(resolve_path(cfg, cfg.paths.predicted_vegetation_polygon_cv))
+predicted_vegetation_dir = Path(resolve_path(cfg, cfg.paths.predicted_vegetation_1m))
 
 study_areas = gpd.read_file(shp_path)
 study_areas = study_areas.drop(index=cfg.study_areas.exclude_indices)  # remove areas not included in analysis
@@ -248,8 +252,8 @@ for area in study_areas.itertuples():
         "nodata": cfg.nodata_value
     })
 
-    # Save to a separate folder so it does not overwrite Predicted_vegetation/
-    output_path = predicted_veg_polygon_cv_dir / f"{area_name}_predicted_vegetation.tif"
+    # Save to the canonical predicted-vegetation folder used by every downstream script
+    output_path = predicted_vegetation_dir / f"{area_name}_predicted_vegetation.tif"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with rasterio.open(output_path, "w", **meta) as dst:
         dst.write(classified_ortho.astype("int32"), 1)
@@ -304,7 +308,7 @@ for area in study_areas.itertuples():
             print(f"No valid external test pixels found for {area_name}.")
 
 # ── Export metrics to CSV ──────────────────────────────────────────────────────
-out_dir = predicted_veg_polygon_cv_dir
+out_dir = predicted_vegetation_dir
 out_dir.mkdir(parents=True, exist_ok=True)
 
 df_random = pd.DataFrame(results_random)

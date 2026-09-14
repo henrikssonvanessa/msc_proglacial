@@ -80,18 +80,24 @@ RESOLUTIONS = {
 # Variables included in the geodiversity index
 FEATURE_COLS = cfg.geodiversity.pca_feature_cols
 
-# Filename templates — {area} is replaced with the glacier name
+# Filename templates for the terrain-derived variables — {area} is replaced with
+# the glacier name. TRI and SWI are handled separately in get_raster_path() since
+# they come from a dedicated pre-computed directory rather than the per-area
+# Geodiversity output folder.
 RASTER_NAMES = {
     'Curvature':  '{area}_curvature.tif',
     'Landforms':  '{area}_landforms.tif',
-    'TRI':        '{area}_TRI.tif',
-    'SWI':        '{area}_SWI.tif'
 }
 
 NODATA_VAL = cfg.nodata_value
 SD_MULTIPLIER_WIDE, SD_MULTIPLIER_NARROW = cfg.classification.sd_multipliers
 CLASS_LABELS = cfg.classification.labels
+TRI_SWI_1M_DIR = resolve_path(cfg, cfg.paths.tri_swi_1m_dir)
 TRI_SWI_20M_DIR = resolve_path(cfg, cfg.paths.tri_swi_20m_dir)
+TRI_FILENAME_1M = cfg.geodiversity.tri_filename_1m
+SWI_FILENAME_1M = cfg.geodiversity.swi_filename_1m
+TRI_FILENAME_20M = cfg.geodiversity.tri_filename_20m
+SWI_FILENAME_20M = cfg.geodiversity.swi_filename_20m
 # ─────────────────────────────────────────────────────────────────────────────
 
 study_areas = gpd.read_file(cfg.paths.outlines_shp)
@@ -143,14 +149,20 @@ def get_raster_path(res_folder, area_name, feature):
     """
     Return the path to the variable raster for a given area and resolution.
 
-    TRI and SWI at 20 m were pre-computed by SAGA GIS and use a different
-    naming convention and directory from the ArcPy-derived 1 m outputs.
+    Curvature and Landforms are derived by this repo's scripts and live in the
+    per-area Geodiversity output folder. TRI and SWI are not computed by this
+    repo — they are loaded from a dedicated pre-computed directory per
+    resolution (config: paths.tri_swi_1m_dir / paths.tri_swi_20m_dir), each
+    with its own filename convention (config: geodiversity.tri_filename_*
+    / swi_filename_*).
     """
-    if res_folder == RESOLUTIONS['20m']:
-        if feature == 'TRI':
-            return f"{TRI_SWI_20M_DIR}/TIF_TRI_{area_name}_DEM_clip.tif"
-        elif feature == 'SWI':
-            return f"{TRI_SWI_20M_DIR}/TIF_SWI_{area_name}_DEM_fill.tif"
+    is_20m = res_folder == RESOLUTIONS['20m']
+    if feature == 'TRI':
+        return f"{TRI_SWI_20M_DIR}/{TRI_FILENAME_20M.format(area=area_name)}" if is_20m \
+            else f"{TRI_SWI_1M_DIR}/{TRI_FILENAME_1M.format(area=area_name)}"
+    elif feature == 'SWI':
+        return f"{TRI_SWI_20M_DIR}/{SWI_FILENAME_20M.format(area=area_name)}" if is_20m \
+            else f"{TRI_SWI_1M_DIR}/{SWI_FILENAME_1M.format(area=area_name)}"
 
     filename = RASTER_NAMES[feature].replace('{area}', area_name)
     return f"{res_folder}/{area_name}/Geodiversity/{filename}"

@@ -18,11 +18,16 @@ paths:
   external_test_gdb: "Proglacial_outline/external_test_data.gdb"
   outputs_1m: "Data/Python/Outputs"
   outputs_20m: "Data/Python/Outputs_20m"
+  # Single canonical predicted-vegetation folder: Veg_RF_polygon_cv.py writes its
+  # final per-area raster (and CV metrics CSVs) here, and every downstream script
+  # (terrain sampling, geodiv_veg_all_areas.py, ndvi_validation.py) reads from here.
   predicted_vegetation_1m: "Data/Python/Outputs/Predicted_vegetation"
-  predicted_vegetation_polygon_cv: "Data/Python/Outputs/Predicted_vegetation_polygon_cv"
   dem_tiles_dir: "Data/DEM/Markhöjdmodell"            # per-area LiDAR DEM tile folders
   snow_cover_dir: "Data/Snow_data"
-  tri_swi_20m_dir: "Data/DEM/TRI_SWI_20m"             # pre-computed SAGA TRI/SWI rasters at 20 m
+  # Manually-generated (QGIS/SAGA) TRI and SWI rasters, one flat folder per resolution,
+  # since these aren't computed by any script in this repo.
+  tri_swi_1m_dir: "Data/DEM/TRI_SWI_1m"
+  tri_swi_20m_dir: "Data/DEM/TRI_SWI_20m"
   glacier_polygon_scratch_gdb: "RD_GIS/RD_GIS.gdb/glacier_polygon_Select"  # scratch feature class for DistanceAccumulation
   arcgis_toolbox_data_management: "c:/program files/arcgis/pro/Resources/ArcToolbox/toolboxes/Data Management Tools.tbx"
 
@@ -88,6 +93,12 @@ high_res_sampling:
 geodiversity:
   window_size: 10                # pixels, sliding-window size for landform diversity (H&L method)
   pca_feature_cols: ["Curvature", "Landforms", "TRI", "SWI"]
+  # Filename patterns for the manually-generated TRI/SWI rasters (paths.tri_swi_1m_dir /
+  # paths.tri_swi_20m_dir); {area} is replaced with the glacier name.
+  tri_filename_1m: "{area}_TRI.tif"
+  swi_filename_1m: "{area}_SWI.tif"
+  tri_filename_20m: "TIF_TRI_{area}_DEM_clip.tif"
+  swi_filename_20m: "TIF_SWI_{area}_DEM_fill.tif"
 
 classification:
   # Geodiversity classes are assigned using global mean +/- sd_multipliers * std

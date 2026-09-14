@@ -46,6 +46,7 @@ dem_tiles_dir = resolve_path(cfg, cfg.paths.dem_tiles_dir)
 arcgis_toolbox_path = cfg.paths.arcgis_toolbox_data_management
 glacier_polygon_scratch_path = resolve_path(cfg, cfg.paths.glacier_polygon_scratch_gdb)
 predicted_vegetation_dir = resolve_path(cfg, cfg.paths.predicted_vegetation_1m)
+tri_swi_1m_dir = resolve_path(cfg, cfg.paths.tri_swi_1m_dir)
 outputs_1m_dir = cfg.paths.outputs_1m
 
 geomorphon_search_radius = 1 * cfg.terrain_variables.geomorphon_search_radius_multiplier  # metres, at 1 m resolution
@@ -95,7 +96,11 @@ for area in studarea_merge.itertuples():
     print("Variables calculated.")
 
     # Step 3: Create stratified sample points and extract variable values
+    # TRI/SWI are pre-computed elsewhere (e.g. QGIS/SAGA) — not derived by this script
+    tri_file_path = f"{tri_swi_1m_dir}/{cfg.geodiversity.tri_filename_1m.format(area=area_name)}"
+    swi_file_path = f"{tri_swi_1m_dir}/{cfg.geodiversity.swi_filename_1m.format(area=area_name)}"
     sample_areas(str(geodiv_out_dir), area_name, merged_dem_path, arcgis_toolbox_path,
-                predicted_vegetation_dir, cfg.high_res_sampling.sample_fraction,
-                cfg.high_res_sampling.sample_max_per_class, cfg.high_res_sampling.min_sample_distance_m)
+                predicted_vegetation_dir, tri_file_path, swi_file_path,
+                cfg.high_res_sampling.sample_fraction, cfg.high_res_sampling.sample_max_per_class,
+                cfg.high_res_sampling.min_sample_distance_m)
     print("Study area sampled.")
