@@ -75,6 +75,8 @@ TRI_FILENAME_20M = cfg.geodiversity.tri_filename_20m
 
 study_areas = gpd.read_file(cfg.paths.outlines_shp)
 study_areas = study_areas.drop(index=cfg.study_areas.exclude_indices)
+if cfg.study_areas.only:
+    study_areas = study_areas[study_areas["Glacier_na"].isin(cfg.study_areas.only)]
 area_names  = [area.Glacier_na for area in study_areas.itertuples()]
 
 

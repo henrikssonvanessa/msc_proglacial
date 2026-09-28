@@ -60,15 +60,18 @@ RF_PARAMS = dict(
 )
 TEST_SIZE = cfg.cross_validation.random_split_test_size
 EXTERNAL_VALIDATION_AREAS = tuple(cfg.study_areas.external_validation_areas)
+RUN_EXTERNAL_VALIDATION = cfg.study_areas.run_external_validation
 
 shp_path = resolve_path(cfg, cfg.paths.outlines_shp)
 gdb = resolve_path(cfg, cfg.paths.training_gdb)
 ext_gdb = resolve_path(cfg, cfg.paths.external_test_gdb)
 outputs_1m_dir = resolve_path(cfg, cfg.paths.outputs_1m)
-predicted_vegetation_dir = Path(resolve_path(cfg, cfg.paths.predicted_vegetation_1m))
+predicted_vegetation_dir = Path(resolve_path(cfg, cfg.paths.predicted_vegetation_dir))
 
 study_areas = gpd.read_file(shp_path)
 study_areas = study_areas.drop(index=cfg.study_areas.exclude_indices)  # remove areas not included in analysis
+if cfg.study_areas.only:
+    study_areas = study_areas[study_areas["Glacier_na"].isin(cfg.study_areas.only)]
 
 # Storage for metrics from the three validation approaches
 results_random = []      # random 70/30 split metrics
@@ -87,9 +90,35 @@ for area in study_areas.itertuples():
     img = ortho_raster.read()
     bands, rows, cols = img.shape
 
+    # Identify pixels outside the study area boundary (NoData in the clipped
+    # orthophoto, e.g. from clip_ortho()'s ExtractByMask) so they can be
+    # excluded from the classified output below, instead of being predicted
+    # as an arbitrary class.
+    ortho_nodata = ortho_raster.nodata
+    if ortho_nodata is None:
+        outside_mask = np.zeros((rows, cols), dtype=bool)
+    elif np.isnan(ortho_nodata):
+        outside_mask = np.any(np.isnan(img), axis=0)
+    else:
+        outside_mask = np.any(img == ortho_nodata, axis=0)
+
     # Load training polygons for this area from the file geodatabase
     # Each polygon has a 'Category' field: 1 = vegetation, 2 = non-vegetation
     df_full = gpd.read_file(filename=gdb, layer=f"{area_name}_training")
+
+    # Drop training polygons that fall entirely outside the current study area
+    # boundary. The study area extent can change (e.g. a new outlines shapefile)
+    # after training polygons were originally digitized, leaving some polygons
+    # fully outside the current boundary.
+    if df_full.crs != study_areas.crs:
+        df_full = df_full.to_crs(study_areas.crs)
+    n_before_extent = len(df_full)
+    df_full = df_full[df_full.intersects(area.geometry)]
+    n_dropped_extent = n_before_extent - len(df_full)
+    if n_dropped_extent:
+        print(f"  Dropped {n_dropped_extent} training polygon(s) outside the "
+              f"{area_name} study area boundary ({n_before_extent} -> {len(df_full)}).")
+
     df = df_full.dropna().reset_index(drop=True)
 
     if df.empty:
@@ -244,6 +273,10 @@ for area in study_areas.itertuples():
     # Reshape predictions back to the original raster grid
     classified_ortho = ortho_predictions.reshape(rows, cols)
 
+    # Set pixels outside the study area boundary to NoData rather than
+    # whatever class the model predicted for them
+    classified_ortho[outside_mask] = cfg.nodata_value
+
     meta = ortho_raster.meta.copy()
     meta.update({
         "count": 1,       # single-band output
@@ -264,7 +297,7 @@ for area in study_areas.itertuples():
     # These two areas were withheld from training entirely.
     # External test polygons (with known Category labels) are used to assess
     # how well the model generalises to new, unseen proglacial areas.
-    if area_name in EXTERNAL_VALIDATION_AREAS:
+    if RUN_EXTERNAL_VALIDATION and area_name in EXTERNAL_VALIDATION_AREAS:
         df_ext = gpd.read_file(filename=ext_gdb, layer=area_name).dropna(subset=["Category"])
         y_true_ext, y_pred_ext = [], []
         with rasterio.open(output_path) as classified_raster:

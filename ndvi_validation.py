@@ -53,11 +53,13 @@ print(os.getcwd())
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 NODATA        = cfg.nodata_value
 SAMPLE_PIXELS = cfg.stats.sample_pixels_cap  # cap on pixels used for Spearman correlation (speed)
-predicted_vegetation_dir = resolve_path(cfg, cfg.paths.predicted_vegetation_1m)
+predicted_vegetation_dir = resolve_path(cfg, cfg.paths.predicted_vegetation_dir)
 # ─────────────────────────────────────────────────────────────────────────────
 
 study_areas = gpd.read_file(cfg.paths.outlines_shp)
 study_areas = study_areas.drop(index=cfg.study_areas.exclude_indices)
+if cfg.study_areas.only:
+    study_areas = study_areas[study_areas["Glacier_na"].isin(cfg.study_areas.only)]
 area_names  = [area.Glacier_na for area in study_areas.itertuples()]
 
 out_folder = Path(cfg.paths.outputs_1m) / "Geo_veg_relation"

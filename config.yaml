@@ -10,25 +10,32 @@
 # (e.g. one per collaborator or study).
 
 paths:
-  base_dir: "C:/TEMP/Vanessa_Henriksson"             # root working directory (scripts chdir here)
-  outlines_shp: "Data/proglacial_outlines.shp"        # master study-area polygons
-  glacier_shp: "Data/glacier_polygon.shp"             # glacier polygons (distance-from-glacier calc)
-  lookup_table_gd: "Data/Python/lookup_table_gd.csv"  # per-area sun azimuth/altitude (for hillshade)
-  training_gdb: "Proglacial_outline/training_data.gdb"
-  external_test_gdb: "Proglacial_outline/external_test_data.gdb"
-  outputs_1m: "Data/Python/Outputs"
-  outputs_20m: "Data/Python/Outputs_20m"
+  base_dir: "C:/TEMP/Vanessa_Henriksson/Proglacial_project"             # root working directory (scripts chdir here)
+  outlines_shp: "Data/Study_areas/proglacial_outlines_new.shp"        # master study-area polygons
+  glacier_shp: "Data/Study_areas/glacier_polygon.shp"             # glacier polygons (distance-from-glacier calc)
+  lookup_table_gd: "Data/Study_areas/lookup_table_gd.csv"  # per-area sun azimuth/altitude (for hillshade)
+  lookup_table_ortho: "Data/Study_areas/lookup_table.csv"  # per-area orthophoto source path (column: ortho); read by Proglacial_project.py
+  training_gdb: "Data/gdb/training_data.gdb"
+  external_test_gdb: "Data/gdb/external_test_data.gdb"
+  outputs_1m: "Data/Outputs_1m"
+  outputs_20m: "Data/Outputs_20m"
   # Single canonical predicted-vegetation folder: Veg_RF_polygon_cv.py writes its
-  # final per-area raster (and CV metrics CSVs) here, and every downstream script
-  # (terrain sampling, geodiv_veg_all_areas.py, ndvi_validation.py) reads from here.
-  predicted_vegetation_1m: "Data/Python/Outputs/Predicted_vegetation"
-  dem_tiles_dir: "Data/DEM/Markhöjdmodell"            # per-area LiDAR DEM tile folders
+  # final per-area raster here (and CV metrics CSVs) at the orthophoto's native
+  # 0.4 m resolution — NOT resampled to 1 m, despite feeding both the 1 m and
+  # 20 m pipelines — and every downstream script (terrain sampling,
+  # geodiv_veg_all_areas.py, ndvi_validation.py) reads from here.
+  predicted_vegetation_dir: "Data/Outputs_1m/Predicted_vegetation"
+  # Flat folder with one DSM file per area, named "{area_name}_DSM_<year>.tif"
+  # (year varies by area, e.g. 2024 for most, 2019 for Helags, 2022 for Stuorra)
+  # — matched by "{area_name}_DSM" prefix in High_res_script.py's mosaic_dem(),
+  # so the year suffix doesn't need to be listed here.
+  dem_tiles_dir: "Data/DSM/Mosaics"
   snow_cover_dir: "Data/Snow_data"
   # Manually-generated (QGIS/SAGA) TRI and SWI rasters, one flat folder per resolution,
   # since these aren't computed by any script in this repo.
   tri_swi_1m_dir: "Data/DEM/TRI_SWI_1m"
   tri_swi_20m_dir: "Data/DEM/TRI_SWI_20m"
-  glacier_polygon_scratch_gdb: "RD_GIS/RD_GIS.gdb/glacier_polygon_Select"  # scratch feature class for DistanceAccumulation
+  glacier_polygon_scratch_gdb: "GIS/Proglacial_project.gdb/glacier_polygon_Select"  # scratch feature class for DistanceAccumulation
   arcgis_toolbox_data_management: "c:/program files/arcgis/pro/Resources/ArcToolbox/toolboxes/Data Management Tools.tbx"
 
 random_state: 42          # shared seed for all RF models and random train/test splits
@@ -37,9 +44,18 @@ nodata_value: -9999        # sentinel used throughout for masked/NoData pixels
 study_areas:
   # Row indices (0-based, as read by geopandas from paths.outlines_shp) excluded
   # from the current analysis (e.g. areas without complete input data).
-  exclude_indices: [12, 14]
+  exclude_indices: [16]
   external_validation_areas: ["Suottas", "Vartas"]
-  drone_only_area: "Kårsa"   # area with dedicated drone-resolution data ('5mm' / '12cm' modes)
+  # Set to false to temporarily skip Veg_RF_polygon_cv.py's external validation
+  # step against external_validation_areas (e.g. while training polygons or
+  # study area extents are being reworked). Random split / polygon CV metrics
+  # are unaffected.
+  run_external_validation: false
+  drone_only_area: "Karsa"   # area with dedicated drone-resolution data ('5mm' / '12cm' modes)
+  # If non-empty, restrict every script to just these Glacier_na names (applied
+  # after exclude_indices) — e.g. ["Suottas"] for a quick single-area test run.
+  # Leave empty ([]) to process all areas as usual.
+  only: []
 
 # Which pre-computed Sentinel-2 snow-cover composite tile covers each area (Low_res_script.py)
 snow_file_lookup:
@@ -47,18 +63,34 @@ snow_file_lookup:
   Vartas: "T33WXQ_snow_cover.tif"
   Mikka: "T33WXQ_snow_cover.tif"
   Ruotes: "T33WXQ_snow_cover.tif"
-  Pårte: "T33WXQ_snow_cover.tif"
-  Kårsa: "T33WXR_snow_cover.tif"
+  Parte: "T33WXQ_snow_cover.tif"
+  Karsa: "T33WXR_snow_cover.tif"
   Riuko: "T33WXR_snow_cover.tif"
   Gallan: "T33WXR_snow_cover.tif"
-  Unna_Räita: "T33WXR_snow_cover.tif"
+  Unna_Raita: "T33WXR_snow_cover.tif"
   Vaktpost: "T33WXR_snow_cover.tif"
-  Storglaciären: "T33WXR_snow_cover.tif"
+  Storglaciaren: "T33WXR_snow_cover.tif"
   Isfall: "T33WXR_snow_cover.tif"
-  Ballinriehppe_II_III: "T33WXR_snow_cover.tif"
+  Ballinriehppe_III: "T33WXR_snow_cover.tif"
   Rabots: "T33WXR_snow_cover.tif"
   Stuorra: "Stuorra_snow_cover.tif"
   Helags: "Helags_snow_cover.tif"
+
+features:
+  # Toggle optional predictor layers on/off. Set to false to skip a layer whose
+  # source rasters aren't available yet (e.g. TRI/SWI not regenerated for a new
+  # area, or snow cover not computed) so the rest of the pipeline can still be
+  # smoke-tested end to end. Read by Sample_areas_1m.py (1 m sampling),
+  # Sample_areas_20m.py (20 m sampling), RF_block_test.py, and
+  # rf_vegetation_20m.py. Re-run sampling AND RF training together whenever you
+  # change these — the sample shapefile's columns depend on which layers were
+  # included at sampling time, so a stale shapefile sampled with different
+  # toggles will not match. NOTE: geodiversity_index_HL.py/PCA.py and
+  # Selection_ratio.py are not affected by these toggles — they read TRI/SWI
+  # directly and need real rasters to run at all.
+  use_tri: false
+  use_swi: false
+  use_snow: false    # 20 m only (Low_res_script.py / rf_vegetation_20m.py)
 
 random_forest:
   vegetation_classifier:      # Veg_RF_polygon_cv.py — 4-band ortho pixel classifier
@@ -77,6 +109,14 @@ cross_validation:
 
 terrain_variables:
   geomorphon_search_radius_multiplier: 3   # search radius (m) = resolution_m * multiplier
+  # Target resolution (m) the mosaicked DSM/DEM is resampled to (bilinear) before
+  # any terrain variables are derived, in High_res_script.py's mosaic_dem(). The
+  # rest of the 1 m pipeline (TRI/SWI, sampling, Low_res_script.py's own resample
+  # to 20 m) assumes the result is at this resolution, regardless of the source
+  # tiles' native resolution (e.g. 0.5 m DSM tiles). Set equal to the tiles'
+  # native resolution to make the resample a no-op. The native-resolution mosaic
+  # is kept as {area}_DEM_native.tif for reference / future re-analysis.
+  dem_resample_target_m: 1
 
 low_res:
   target_resolution: 20         # metres

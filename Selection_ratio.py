@@ -138,6 +138,8 @@ elif RESOLUTION == '12cm':
 
 study_areas = gpd.read_file(cfg.paths.outlines_shp)
 study_areas = study_areas.drop(index=cfg.study_areas.exclude_indices)
+if cfg.study_areas.only:
+    study_areas = study_areas[study_areas["Glacier_na"].isin(cfg.study_areas.only)]
 if karsa_only:
     study_areas = study_areas[study_areas["Glacier_na"] == cfg.study_areas.drone_only_area]
 area_names  = sorted([area.Glacier_na for area in study_areas.itertuples()])

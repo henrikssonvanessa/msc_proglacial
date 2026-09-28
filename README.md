@@ -22,7 +22,7 @@ Approximately 16 proglacial areas in northern Sweden including Kårsa, Suottas, 
 |-------|---------|-------------------------------------------------------|
 | Orthophotos | 0.4 m | 4-band (R, G, B, NIR) aerial imagery                  |
 | Sentinel-2 | 10–20 m | Bands B3 (Green), B4 (Red), B8 (NIR), B11 (SWIR), SCL |
-| DTM   | 1 m | Lantmäteriet Markhöjdmodell                           |
+| DSM   | 0.5 m | Photogrammetric surface model tiles, resampled to 1 m (`terrain_variables.dem_resample_target_m`) before terrain variables are derived |
 | Snow cover | 20 m | Sentinel-2-derived snow cover fraction                |
 | TRI / SWI | 1 m & 20 m | Terrain Ruggedness Index / SAGA Wetness Index, generated manually (QGIS/SAGA) — not computed by any script in this repo |
 
@@ -54,11 +54,14 @@ script(s) read it.
 ├── config.yaml                # Central configuration: paths, study areas, model/CV
 │                               # settings, thresholds — edit this to adapt the pipeline
 ├── config_utils.py             # Loads config.yaml into an attribute-accessible object
-├── arcgis_functions.py         # Shared ArcPy helper (per-area shapefile selection)
+├── arcgis_functions.py         # Shared ArcPy helpers (per-area shapefile selection, orthophoto clipping)
+├── Proglacial_project.py       # Step 0: clip source orthophotos to each study area
 ├── Veg_RF_polygon_cv.py        # Step 1: RF vegetation classification with polygon-based cross-validation
-├── High_res_script.py          # DTM helpers: mosaic, clip, fill, terrain variable calculation
-├── Variable_calculation.py     # Step 2: Calculate terrain variables at 1 m from LiDAR DEM
-├── Low_res_script.py           # Step 3: Calculate terrain variables at 20 m; integrate snow cover
+├── High_res_script.py          # DSM/DEM helpers: mosaic, resample, clip, fill, terrain variable calculation
+├── Variable_calculation.py     # Step 2a: Calculate terrain variables at 1 m from the DSM/DEM
+├── Sample_areas_1m.py          # Step 2b: Sample terrain variables + TRI/SWI + predicted vegetation at 1 m
+├── Low_res_script.py           # Step 3a: Calculate terrain variables at 20 m
+├── Sample_areas_20m.py         # Step 3b: Aggregate vegetation, sample terrain variables + TRI/SWI + snow at 20 m
 ├── RF_block_test.py            # Step 4a: RF vegetation prediction at 1 m with block cross-validation
 ├── rf_vegetation_20m.py        # Step 4b: RF vegetation prediction at 20 m with block cross-validation
 ├── ndvi_validation.py          # Validate predicted vegetation rasters against S2 NDVI
@@ -68,30 +71,44 @@ script(s) read it.
 └── geodiv_veg_all_areas.py     # Step 6: Geodiversity–vegetation correlation across all study areas
 ```
 
-> **Note:** Earlier preprocessing steps that reprojected/clipped Sentinel-2 and
-> orthophoto imagery and calibrated ortho NDVI against Sentinel-2 (formerly
-> `Proglacial_project.py`, `Calibration_NDVI.py`, `NDVI_functions.py`) have
-> been removed — that preprocessing has already been run and its outputs
-> exist in `Data/Python/Outputs/`. `ndvi_validation.py` still expects the
-> `{area}_NDVI_S2.tif` rasters those scripts produced; if you need to
-> regenerate them from scratch for a new area, that preprocessing will need
-> to be reimplemented.
+> **Note:** `Proglacial_project.py` used to also handle Sentinel-2
+> reprojection/clipping and an OLS ortho-vs-S2 band correlation step (for
+> calibrating ortho NDVI against Sentinel-2 NDVI, alongside the now-removed
+> `Calibration_NDVI.py` / `NDVI_functions.py`). That preprocessing has been
+> dropped — orthophoto clipping is the only output any current script in this
+> repo depends on. That Sentinel-2/NDVI-calibration preprocessing has already
+> been run once and its outputs exist in `Data/Python/Outputs/`.
+> `ndvi_validation.py` still expects the `{area}_NDVI_S2.tif` rasters it
+> produced; if you need to regenerate them from scratch for a new area, that
+> preprocessing will need to be reimplemented.
 >
 > **TRI/SWI:** neither the 1 m nor 20 m pipeline computes TRI or SWI —
 > both are generated externally (QGIS/SAGA) and read from
 > `paths.tri_swi_1m_dir` / `paths.tri_swi_20m_dir` in `config.yaml`, using
 > the filename patterns in `geodiversity.tri_filename_1m` /
 > `swi_filename_1m` / `tri_filename_20m` / `swi_filename_20m`. Generate
-> these before running `Variable_calculation.py`, `RF_block_test.py`,
-> `Selection_ratio.py`, or either geodiversity index script.
+> these before running `Sample_areas_1m.py`, `Sample_areas_20m.py`,
+> `RF_block_test.py`, `Selection_ratio.py`, or either geodiversity index
+> script — or set `features.use_tri` / `features.use_swi` to `false` to skip
+> them temporarily (`Variable_calculation.py` and `Low_res_script.py`, which
+> only calculate terrain variables, don't need TRI/SWI at all).
 >
 > **Predicted vegetation:** `Veg_RF_polygon_cv.py` is the only vegetation-
 > classification script in the repo, so its output at
-> `paths.predicted_vegetation_1m` is the single canonical vegetation raster
-> that every downstream step (terrain sampling, `geodiv_veg_all_areas.py`,
-> `ndvi_validation.py`) reads from.
+> `paths.predicted_vegetation_dir` (native 0.4 m orthophoto resolution — not
+> resampled) is the single canonical vegetation raster that every downstream
+> step (`Sample_areas_1m.py`, `Sample_areas_20m.py`, `geodiv_veg_all_areas.py`,
+> `ndvi_validation.py`) reads from. `Variable_calculation.py` and
+> `Low_res_script.py` — the terrain-variable-only scripts — don't need it at
+> all, so terrain variables can be computed before or independently of
+> running the vegetation classifier.
 
 ## Workflow
+
+### 0. Orthophoto Preprocessing (`Proglacial_project.py`)
+- Clips the source orthophoto (path from `paths.lookup_table_ortho`) to each study area polygon
+- Produces `{area_name}_ortho_clip.tif` under `paths.outputs_1m/{area_name}/` — the input `Veg_RF_polygon_cv.py` reads
+- Run this whenever source orthophotos change or a new study area is added
 
 ### 1. Vegetation Mapping (`Veg_RF_polygon_cv.py`)
 - Train a Random Forest classifier (300 trees, max depth 20 by default — configurable) on 4-band orthophoto pixels sampled within training polygons
@@ -103,15 +120,26 @@ script(s) read it.
 - Exports a `classification_results_comparison.csv` with the delta between polygon CV and random split, per area and class
 - Produce predicted vegetation rasters at 0.4 m resolution
 
-### 2. Terrain Variable Calculation (`Variable_calculation.py`, `High_res_script.py`)
-- Mosaic and clip LiDAR DEM tiles per study area
+### 2a. Terrain Variable Calculation at 1 m (`Variable_calculation.py`, `High_res_script.py`)
+- Mosaic DSM tiles per study area, resample to the target analysis resolution (`terrain_variables.dem_resample_target_m`, 1 m by default — the native-resolution mosaic is kept as `{area}_DEM_native.tif` for reference), then clip and fill sinks
 - Derive terrain variables via ArcPy Spatial Analyst: slope, aspect (sin/cos), curvature, hillshade, landforms, distance from glacier
-- TRI and SWI are *not* derived here — they are loaded from the externally-generated rasters described above
+- Does *not* need the predicted vegetation raster or TRI/SWI — can be run independently of `Veg_RF_polygon_cv.py`
 
-### 3. Low-Resolution Processing (`Low_res_script.py`)
-- Aggregate vegetation from 1 m to 20 m
+### 2b. Sampling at 1 m (`Sample_areas_1m.py`, `High_res_script.py`)
+- Resamples the predicted vegetation raster to the target resolution and adds it, plus TRI/SWI (each skippable via `features.use_tri` / `features.use_swi`), to the terrain variable rasters from step 2a
+- Creates stratified sample points and extracts all variable values, producing `{area_name}_samples.shp` — the input `RF_block_test.py` reads
+- Requires step 2a and `Veg_RF_polygon_cv.py` to have already run for the areas being sampled
+
+### 3a. Terrain Variable Calculation at 20 m (`Low_res_script.py`)
+- Resample the native-resolution DSM mosaic directly to 20 m (bypassing the 1 m grid), then clip and fill sinks
 - Re-calculate terrain rasters at 20 m resolution
-- Add snow cover as an additional feature for 20 m models
+- Does *not* need the predicted vegetation raster, TRI/SWI, or snow cover — can be run independently of `Veg_RF_polygon_cv.py`
+
+### 3b. Sampling at 20 m (`Sample_areas_20m.py`)
+- Aggregate vegetation from 0.4 m to 20 m (vegetation fraction), apply a threshold to classify each cell
+- Add TRI, SWI, and snow cover as additional features (each skippable via `features.use_tri` / `features.use_swi` / `features.use_snow`)
+- Creates stratified sample points and extracts all variable values, producing `{area_name}_samples.shp` — the input `rf_vegetation_20m.py` reads
+- Requires step 3a and `Veg_RF_polygon_cv.py` to have already run for the areas being sampled
 
 ### 4. RF Prediction with Block Cross-Validation (`RF_block_test.py`, `rf_vegetation_20m.py`, `Selection_ratio.py`)
 - Spatial block cross-validation to account for autocorrelation (200 m blocks at 1 m resolution; 400 m at 20 m resolution — configurable)

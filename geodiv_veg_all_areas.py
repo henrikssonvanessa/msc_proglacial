@@ -68,6 +68,8 @@ SD_MULTIPLIER_WIDE, SD_MULTIPLIER_NARROW = cfg.classification.sd_multipliers
 
 study_areas = gpd.read_file(cfg.paths.outlines_shp)
 study_areas = study_areas.drop(index=cfg.study_areas.exclude_indices)
+if cfg.study_areas.only:
+    study_areas = study_areas[study_areas["Glacier_na"].isin(cfg.study_areas.only)]
 if study_areas.crs is None:
     study_areas = study_areas.set_crs('EPSG:3006')  # SWEREF99 TM
 area_names  = [area.Glacier_na for area in study_areas.itertuples()]
@@ -316,7 +318,7 @@ for area_row in study_areas.itertuples():
         # The 1 m vegetation raster lives in a shared folder (not per-area)
         veg_path = f"{res_folder}/{area_name}/Geodiversity/{area_name}_predicted_vegetation_{res_label}.tif"
         if res_label == '1m':
-            veg_path = f"{cfg.paths.predicted_vegetation_1m}/{area_name}_predicted_vegetation.tif"
+            veg_path = f"{cfg.paths.predicted_vegetation_dir}/{area_name}_predicted_vegetation.tif"
 
         hl_path            = f"{res_folder}/{area_name}/Geodiversity/{area_name}_geoindex_hl_{res_label}.tif"
         ds_path            = f"{res_folder}/{area_name}/Geodiversity/{area_name}_geoindex_{res_label}.tif"

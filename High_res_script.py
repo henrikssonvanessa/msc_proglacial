@@ -5,13 +5,19 @@ These functions are imported and called by Variable_calculation.py.
 
 Functions
 ---------
-mosaic_dem         -- Mosaic LiDAR DEM tiles, clip to study area, and fill sinks
+mosaic_dem         -- Mosaic DSM/DEM tiles, resample to the target resolution,
+                      clip to study area, and fill sinks
 calculate_variables -- Derive terrain variables from the DEM using ArcPy Spatial Analyst
 sample_areas       -- Create stratified sample points and extract variable values
 
-All terrain variables are derived from the Lantmäteriet Markhöjdmodell (LiDAR DEM)
-at ~1 m resolution and saved to:
-  Data/Python/Outputs/{area_name}/Geodiversity/
+Terrain variables are derived from a DSM/DEM mosaic resampled to
+terrain_variables.dem_resample_target_m (config.yaml; 1 m by default) and saved to:
+  {paths.outputs_1m}/{area_name}/Geodiversity/
+The source DSM files (one per area, in a flat folder, named with an
+"{area_name}_DSM..." prefix) need not match the target resolution — e.g. they
+are currently delivered at 0.5 m — mosaic_dem() resamples before any terrain
+variable is derived, keeping the native-resolution mosaic on disk as
+{area_name}_DEM_native.tif for reference.
 
 Requires: arcpy (ArcGIS Pro with Spatial Analyst, Image Analyst and Image Ext extensions)
 """
@@ -24,45 +30,78 @@ import arcpy
 from arcpy.sa import *
 
 
-def mosaic_dem(area_shp, area_name, geodiv_out_dir, dem_tiles_dir):
+def mosaic_dem(area_shp, area_name, geodiv_out_dir, dem_tiles_dir, target_resolution_m=1):
     """
-    Merge LiDAR DEM tiles for one study area, clip to the study area, and fill sinks.
+    Merge DSM/DEM tiles for one study area, resample to the target analysis
+    resolution, clip to the study area, and fill sinks.
 
-    The LiDAR DEM is delivered as multiple tiles; they must be mosaicked into a
-    single raster before terrain analysis. Sink filling ensures hydrological
-    consistency (no artificial closed depressions) and is required for correct
-    derivation of the SWI (Saga Wetness Index).
+    The DSM/DEM is delivered as multiple tiles; they must be mosaicked into a
+    single raster before terrain analysis. The tiles' native resolution need
+    not match the resolution the rest of the pipeline assumes (e.g. 0.5 m DSM
+    tiles vs. a 1 m analysis grid), so the mosaic is resampled (bilinear —
+    appropriate for continuous elevation data) to target_resolution_m
+    immediately after mosaicking, before any terrain variables are derived.
+    The native-resolution mosaic is kept on disk as {area_name}_DEM_native.tif
+    for reference / possible re-analysis at native resolution later.
+
+    Sink filling ensures hydrological consistency (no artificial closed
+    depressions) and is required for correct derivation of the SWI (Saga
+    Wetness Index).
 
     Parameters
     ----------
     area_shp       : str  Path to the single-area shapefile (used as mask)
     area_name      : str  Glacier name
     geodiv_out_dir : str  Output directory for geodiversity products
-    dem_tiles_dir  : str  Directory containing per-area LiDAR DEM tile subfolders
-                          (config: paths.dem_tiles_dir)
+    dem_tiles_dir  : str  Flat directory containing one DSM file per study area,
+                          named with an "{area_name}_DSM..." prefix (e.g.
+                          "Suottas_DSM_2024.tif") (config: paths.dem_tiles_dir)
+    target_resolution_m : float  Resolution (m) to resample the mosaic to before
+                          deriving terrain variables (config:
+                          terrain_variables.dem_resample_target_m). Set equal
+                          to the tiles' native resolution to make this a no-op.
 
     Returns
     -------
-    str  Path to the merged (non-clipped) DEM raster
+    str  Path to the merged, resampled (non-clipped) DEM raster
     """
-    dem_folder = f"{dem_tiles_dir}/{area_name}"
-
-    # Collect all .tif DEM tiles in the area-specific folder
-    files_list = os.listdir(dem_folder)
+    # dem_tiles_dir is a flat folder holding one DSM file per area, named with
+    # an "{area_name}_DSM..." prefix (e.g. "Suottas_DSM_2024.tif") — match by
+    # prefix so the (possibly per-area-varying) suffix doesn't need to be known.
+    files_list = os.listdir(dem_tiles_dir)
     dem_files_list = []
     for file in files_list:
-        if file.endswith(".tif"):
-            dem_files_list.append(Raster(f"{dem_folder}/{file}"))
+        if file.startswith(f"{area_name}_DSM") and file.endswith(".tif"):
+            dem_files_list.append(Raster(f"{dem_tiles_dir}/{file}"))
 
-    # Merge all tiles into a single raster using the study area polygon as mask
-    merged_dem_path = f"{geodiv_out_dir}/{area_name}_DEM.tif"
+    if not dem_files_list:
+        raise FileNotFoundError(
+            f"No DSM file found for {area_name} in {dem_tiles_dir} "
+            f"(expected a filename like '{area_name}_DSM_<year>.tif')"
+        )
+
+    # Merge all tiles into a single raster at native resolution, using the
+    # study area polygon as mask. Kept on disk for reference / re-analysis at
+    # native resolution.
+    merged_dem_native_path = f"{geodiv_out_dir}/{area_name}_DEM_native.tif"
     with arcpy.EnvManager(mask=area_shp):
         Output_mosaic = arcpy.management.MosaicToNewRaster(
             input_rasters=dem_files_list,
             output_location=geodiv_out_dir,
             pixel_type="32_BIT_FLOAT",
-            raster_dataset_name_with_extension=f"{area_name}_DEM.tif",
+            raster_dataset_name_with_extension=f"{area_name}_DEM_native.tif",
             number_of_bands=1)[0]
+
+    # Resample to the target analysis resolution. Everything downstream
+    # (terrain variables, the sample shapefile, Low_res_script.py's own
+    # resample-to-20m step) assumes {area_name}_DEM.tif is at this resolution.
+    merged_dem_path = f"{geodiv_out_dir}/{area_name}_DEM.tif"
+    arcpy.management.Resample(
+        in_raster=merged_dem_native_path,
+        out_raster=merged_dem_path,
+        cell_size=target_resolution_m,
+        resampling_type="BILINEAR"
+    )
 
     # Clip the merged DEM to the exact study area boundary
     dem_clip_tif = f"{geodiv_out_dir}/{area_name}_DEM_clip.tif"
@@ -209,7 +248,8 @@ def calculate_variables(area_name, geodiv_out_dir, merged_dem_path, sun_azim, su
 
 def sample_areas(geodiv_out_dir, area_name, merged_dem_path, arcgis_toolbox_path,
                  predicted_vegetation_dir, tri_file_path, swi_file_path, sample_fraction=0.10,
-                 sample_max_per_class=2000, min_sample_distance_m=2):
+                 sample_max_per_class=2000, min_sample_distance_m=2, use_tri=True, use_swi=True,
+                 target_resolution_m=1):
     """
     Create stratified sample points and extract terrain variable values at each point.
 
@@ -241,7 +281,7 @@ def sample_areas(geodiv_out_dir, area_name, merged_dem_path, arcgis_toolbox_path
     arcgis_toolbox_path  : str   Path to ArcGIS Pro's Data Management Tools.tbx
                                  (config: paths.arcgis_toolbox_data_management)
     predicted_vegetation_dir : str  Directory holding the 0.4 m predicted vegetation
-                                 rasters (config: paths.predicted_vegetation_1m)
+                                 rasters (config: paths.predicted_vegetation_dir)
     tri_file_path        : str   Path to the pre-computed 1 m TRI raster
                                  (config: paths.tri_swi_1m_dir + geodiversity.tri_filename_1m)
     swi_file_path        : str   Path to the pre-computed 1 m SWI raster
@@ -251,6 +291,14 @@ def sample_areas(geodiv_out_dir, area_name, merged_dem_path, arcgis_toolbox_path
     sample_max_per_class : int   Max samples per class (config: high_res_sampling.sample_max_per_class)
     min_sample_distance_m: float Minimum spacing between sample points, in metres
                                  (config: high_res_sampling.min_sample_distance_m)
+    use_tri              : bool Include the TRI raster as a predictor (config: features.use_tri).
+                                 Set False to sanity-check the pipeline without a real TRI raster —
+                                 must match the toggle used when RF_block_test.py reads the result.
+    use_swi              : bool Include the SWI raster as a predictor (config: features.use_swi).
+                                 Same caveat as use_tri.
+    target_resolution_m  : float Resolution (m) to resample the predicted vegetation raster to,
+                                 matching the DEM/terrain variable resolution (config:
+                                 terrain_variables.dem_resample_target_m).
     """
     arcpy.ImportToolbox(arcgis_toolbox_path)
     arcpy.CheckOutExtension("ImageExt")
@@ -265,6 +313,7 @@ def sample_areas(geodiv_out_dir, area_name, merged_dem_path, arcgis_toolbox_path
     exclude = {
         f"{area_name}_aspect.tif",          # raw aspect in degrees — not used directly
         f"{area_name}_aspect_rad.tif",       # intermediate (aspect in radians)
+        f"{area_name}_DEM_native.tif",       # native-resolution mosaic, kept only for reference
         f"{area_name}_DEM_clip.tif",         # intermediate DEM
         f"{area_name}_DEM_fill.tif",         # intermediate DEM
         f"{area_name}_geomorph.tif",         # raw geomorphon output (landforms is the classified version)
@@ -276,21 +325,28 @@ def sample_areas(geodiv_out_dir, area_name, merged_dem_path, arcgis_toolbox_path
         if file.endswith(".tif") and file not in exclude:
             variables_files_list.append(Raster(os.path.join(variables_folder, file)))
 
-    # Add TRI and SWI — loaded directly from the pre-computed source rasters
-    variables_files_list.append(Raster(tri_file_path))
-    variables_files_list.append(Raster(swi_file_path))
+    # Add TRI and SWI — loaded directly from the pre-computed source rasters.
+    # Skippable via config (features.use_tri / features.use_swi) when those
+    # rasters aren't available yet; RF_block_test.py must use the same toggles
+    # to match the resulting column layout.
+    if use_tri:
+        variables_files_list.append(Raster(tri_file_path))
+    if use_swi:
+        variables_files_list.append(Raster(swi_file_path))
 
-    # Resample vegetation from 0.4 m to 1 m using NEAREST (categorical data)
-    # so it aligns exactly with the 1 m DEM-derived variables
+    # Resample vegetation from 0.4 m to the target analysis resolution using
+    # NEAREST (categorical data) so it aligns exactly with the DEM-derived
+    # variables. File is still named "_1m" for historical reasons even if
+    # target_resolution_m is set to something else.
     predicted_vegetation_04m = f"{predicted_vegetation_dir}/{area_name}_predicted_vegetation.tif"
     predicted_vegetation_1m = os.path.join(variables_folder, f"{area_name}_predicted_vegetation_1m.tif")
     with arcpy.EnvManager(snapRaster=merged_dem_path):
-        arcpy.management.Resample(predicted_vegetation_04m, predicted_vegetation_1m, "1", "NEAREST")
+        arcpy.management.Resample(predicted_vegetation_04m, predicted_vegetation_1m, target_resolution_m, "NEAREST")
 
-    # Add the 1 m vegetation raster as the last variable to sample
+    # Add the resampled vegetation raster as the last variable to sample
     variables_files_list.append(arcpy.Raster(predicted_vegetation_1m))
 
-    print("Predicted vegetation resampled to 1m.")
+    print(f"Predicted vegetation resampled to {target_resolution_m}m.")
 
     # Count pixels per class to set a proportional sample size
     arr = arcpy.RasterToNumPyArray(predicted_vegetation_1m, nodata_to_value=0)

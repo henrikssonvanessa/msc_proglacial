@@ -24,9 +24,14 @@ For each study area:
   6. Saves feature importance, permutation importance, PDP, and Spearman correlation
      figures, and exports summary metrics to CSV
 
-Features (9 variables at 1 m):
+Features (9 variables at 1 m by default):
   Landforms, Distance, Aspect_sin, Elevation, Curvature, Aspect_cos,
   Hillshade, TRI, SWI
+  TRI/SWI can be excluded via config.yaml's features.use_tri / features.use_swi
+  (e.g. to sanity-check the pipeline before those rasters are available) —
+  Sample_areas_1m.py must be re-run with the same toggles first, since the
+  sample shapefile's columns depend on which layers were included at sampling
+  time.
 
 Target: Vegetation (1=vegetated, recoded to 1; 2=non-vegetated, recoded to 0)
 
@@ -72,8 +77,33 @@ N_FOLDS    = cfg.cross_validation.block_cv_folds  # number of spatial CV folds
 RF_PARAMS  = dict(n_estimators=cfg.random_forest.terrain_classifier.n_estimators, random_state=cfg.random_state)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── Sample shapefile column mapping ─────────────────────────────────────────────
+# High_res_script.py's sample_areas() (called from Sample_areas_1m.py) always
+# samples 8 fixed terrain variables first (in this order), then appends SWI
+# and TRI if enabled, then the vegetation target last. ArcPy's Sample tool
+# names columns positionally (v_raster_1, v_raster_2, ...), truncated to
+# "v_raste_N" once N reaches two digits — so the mapping below must move in
+# lockstep with features.use_tri / features.use_swi in config.yaml and with
+# which rasters Sample_areas_1m.py was actually run with (re-run it if you
+# change these after the fact).
+BASE_FEATURE_COLS = ['Aspect_cos', 'Aspect_sin', 'Curvature', 'Elevation',
+                     'Distance', 'Hillshade', 'Landforms', 'Slope']
+OPTIONAL_FEATURE_COLS = []
+if cfg.features.use_swi:
+    OPTIONAL_FEATURE_COLS.append('SWI')
+if cfg.features.use_tri:
+    OPTIONAL_FEATURE_COLS.append('TRI')
+
+ALL_SAMPLE_COLS = BASE_FEATURE_COLS + OPTIONAL_FEATURE_COLS + ['Vegetation']
+new_names = {
+    (f"v_raster_{i}" if i < 10 else f"v_raste_{i}"): name
+    for i, name in enumerate(ALL_SAMPLE_COLS, start=1)
+}
+
 study_areas = gpd.read_file(cfg.paths.outlines_shp)
 study_areas = study_areas.drop(index=cfg.study_areas.exclude_indices)
+if cfg.study_areas.only:
+    study_areas = study_areas[study_areas["Glacier_na"].isin(cfg.study_areas.only)]
 
 fig_folder = Path(cfg.paths.outputs_1m) / "Figures"
 fig_folder.mkdir(parents=True, exist_ok=True)
@@ -98,14 +128,7 @@ for area in study_areas.itertuples():
     print(f"Samples after NaN removal:  {len(gdf)}")
 
     # Rename generic ArcPy column names to meaningful variable names
-    # Note: ArcPy truncates long column names — "v_raste_10" is not "v_raster_10"
-    new_names = {
-        "v_raster_1": "Aspect_cos", "v_raster_2": "Aspect_sin",
-        "v_raster_3": "Curvature",  "v_raster_4": "Elevation",
-        "v_raster_5": "Distance",   "v_raster_6": "Hillshade",
-        "v_raster_7": "Landforms",  "v_raster_8": "Slope",
-        "v_raster_9": "SWI", "v_raste_10": "TRI", "v_raste_11": "Vegetation"
-    }
+    # (mapping built above from config.yaml's features.use_tri / use_swi)
     gdf = gdf.rename(columns=new_names)
 
     # ── Assign spatial block IDs ───────────────────────────────────────────────
@@ -130,8 +153,10 @@ for area in study_areas.itertuples():
         n_folds_area = N_FOLDS
 
     # ── Feature matrix and target vector ──────────────────────────────────────
+    # Excludes 'Slope' (sampled but not used as a model feature) and 'Vegetation'
+    # (the target). TRI/SWI are included only if enabled in config.yaml.
     feature_cols = ['Landforms', 'Distance', 'Aspect_sin', 'Elevation',
-                    'Curvature', 'Aspect_cos', 'Hillshade', 'TRI', 'SWI']
+                    'Curvature', 'Aspect_cos', 'Hillshade'] + OPTIONAL_FEATURE_COLS
     x = gdf[feature_cols]
     # Recode: 1 (vegetation) → 1, 2 (non-vegetation) → 0
     y = gdf['Vegetation'].replace({1: 1, 2: 0}).astype(int)

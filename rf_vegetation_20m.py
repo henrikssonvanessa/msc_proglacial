@@ -4,7 +4,8 @@
 Step 6b — Random Forest vegetation prediction at 20 m with spatial block cross-validation.
 
 This script mirrors RF_block_test.py but operates on the 20 m dataset produced
-in Low_res_script.py. The key differences from the 1 m model are:
+in Sample_areas_20m.py (which itself depends on terrain variables from
+Low_res_script.py). The key differences from the 1 m model are:
 
   - Block size: 400 m (doubled from 200 m) because at 20 m resolution each
     block covers the same number of pixels, but the physical extent needs to
@@ -12,8 +13,13 @@ in Low_res_script.py. The key differences from the 1 m model are:
   - Additional predictor: Snow_cover — a Sentinel-2-derived fraction of the
     growing season during which a pixel is snow-covered. Persistent snow
     cover prevents or delays vegetation establishment.
-  - Features (10 variables): Landforms, Distance, Aspect_sin, Elevation,
-    Curvature, Aspect_cos, Hillshade, TRI, SWI, Snow_cover
+  - Features (10 variables by default): Landforms, Distance, Aspect_sin,
+    Elevation, Curvature, Aspect_cos, Hillshade, TRI, SWI, Snow_cover
+    TRI/SWI/Snow_cover can be excluded via config.yaml's features.use_tri /
+    features.use_swi / features.use_snow (e.g. to sanity-check the pipeline
+    before those rasters are available) — Sample_areas_20m.py must be re-run
+    with the same toggles first, since the sample shapefile's columns depend
+    on which layers were included at sampling time.
 
 The outputs are written to Data/Python/Outputs_20m/ so they do not overwrite
 the 1 m results.
@@ -53,31 +59,42 @@ RF_PARAMS  = dict(n_estimators=cfg.random_forest.terrain_classifier.n_estimators
 
 study_areas = gpd.read_file(cfg.paths.outlines_shp)
 study_areas = study_areas.drop(index=cfg.study_areas.exclude_indices)
+if cfg.study_areas.only:
+    study_areas = study_areas[study_areas["Glacier_na"].isin(cfg.study_areas.only)]
 
 fig_folder = Path(cfg.paths.outputs_20m) / "Figures"
 fig_folder.mkdir(parents=True, exist_ok=True)
 
-# Column rename mapping for the 20 m sample shapefile
-# The column order from ArcPy Sample differs slightly from the 1 m version
-# because snow cover (v_raste_12) was appended last in Low_res_script.py
+# ── Sample shapefile column mapping ─────────────────────────────────────────────
+# Sample_areas_20m.py's sample_areas_lowres() picks up 9 fixed columns from its
+# output folder listing (alphabetical, so the low-res vegetation raster lands
+# between Landforms and Slope), then appends TRI, SWI, and snow cover — each
+# skippable — in that order. ArcPy's Sample tool names columns positionally
+# (v_raster_1, v_raster_2, ...), truncated to "v_raste_N" once N reaches two
+# digits — so this mapping must move in lockstep with features.use_tri /
+# features.use_swi / features.use_snow in config.yaml and with which rasters
+# Sample_areas_20m.py was actually run with (re-run it if you change these
+# after the fact).
+BASE_FEATURE_COLS = ['Aspect_cos', 'Aspect_sin', 'Curvature', 'Elevation',
+                     'Distance', 'Hillshade', 'Landforms', 'Vegetation', 'Slope']
+OPTIONAL_FEATURE_COLS = []
+if cfg.features.use_tri:
+    OPTIONAL_FEATURE_COLS.append('TRI')
+if cfg.features.use_swi:
+    OPTIONAL_FEATURE_COLS.append('SWI')
+if cfg.features.use_snow:
+    OPTIONAL_FEATURE_COLS.append('Snow_cover')
+
+ALL_SAMPLE_COLS = BASE_FEATURE_COLS + OPTIONAL_FEATURE_COLS
 new_names = {
-    "v_raster_1": "Aspect_cos",
-    "v_raster_2": "Aspect_sin",
-    "v_raster_3": "Curvature",
-    "v_raster_4": "Elevation",
-    "v_raster_5": "Distance",
-    "v_raster_6": "Hillshade",
-    "v_raster_7": "Landforms",
-    "v_raster_8": "Vegetation",   # target variable
-    "v_raster_9": "Slope",
-    "v_raste_10": "TRI",
-    "v_raste_11": "SWI",
-    "v_raste_12": "Snow_cover",   # additional predictor vs 1 m model
+    (f"v_raster_{i}" if i < 10 else f"v_raste_{i}"): name
+    for i, name in enumerate(ALL_SAMPLE_COLS, start=1)
 }
 
-# Snow_cover added as the 10th predictor at 20 m
+# Excludes 'Slope' (sampled but not used as a model feature) and 'Vegetation'
+# (the target). TRI/SWI/Snow_cover are included only if enabled in config.yaml.
 feature_cols = ['Landforms', 'Distance', 'Aspect_sin', 'Elevation',
-                'Curvature', 'Aspect_cos', 'Hillshade', 'TRI', 'SWI', 'Snow_cover']
+                'Curvature', 'Aspect_cos', 'Hillshade'] + OPTIONAL_FEATURE_COLS
 
 random_split_rows = []
 block_cv_rows     = []
