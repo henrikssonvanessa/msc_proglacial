@@ -24,9 +24,9 @@ For each study area:
   6. Saves feature importance, permutation importance, PDP, and Spearman correlation
      figures, and exports summary metrics to CSV
 
-Features (9 variables at 1 m by default):
+Features (10 variables at 1 m by default):
   Landforms, Distance, Aspect_sin, Elevation, Curvature, Aspect_cos,
-  Hillshade, TRI, SWI
+  Hillshade, Slope, TRI, SWI
   TRI/SWI can be excluded via config.yaml's features.use_tri / features.use_swi
   (e.g. to sanity-check the pipeline before those rasters are available) —
   Sample_areas_1m.py must be re-run with the same toggles first, since the
@@ -79,20 +79,21 @@ RF_PARAMS  = dict(n_estimators=cfg.random_forest.terrain_classifier.n_estimators
 
 # ── Sample shapefile column mapping ─────────────────────────────────────────────
 # High_res_script.py's sample_areas() (called from Sample_areas_1m.py) always
-# samples 8 fixed terrain variables first (in this order), then appends SWI
-# and TRI if enabled, then the vegetation target last. ArcPy's Sample tool
-# names columns positionally (v_raster_1, v_raster_2, ...), truncated to
-# "v_raste_N" once N reaches two digits — so the mapping below must move in
-# lockstep with features.use_tri / features.use_swi in config.yaml and with
-# which rasters Sample_areas_1m.py was actually run with (re-run it if you
-# change these after the fact).
+# samples 8 fixed terrain variables first (in this order), then appends TRI
+# and SWI if enabled (in that order — see sample_areas()'s "Add TRI and SWI"
+# block), then the vegetation target last. ArcPy's Sample tool names columns
+# positionally (v_raster_1, v_raster_2, ...), truncated to "v_raste_N" once N
+# reaches two digits — so the mapping below must move in lockstep with
+# features.use_tri / features.use_swi in config.yaml and with which rasters
+# Sample_areas_1m.py was actually run with (re-run it if you change these
+# after the fact).
 BASE_FEATURE_COLS = ['Aspect_cos', 'Aspect_sin', 'Curvature', 'Elevation',
                      'Distance', 'Hillshade', 'Landforms', 'Slope']
 OPTIONAL_FEATURE_COLS = []
-if cfg.features.use_swi:
-    OPTIONAL_FEATURE_COLS.append('SWI')
 if cfg.features.use_tri:
     OPTIONAL_FEATURE_COLS.append('TRI')
+if cfg.features.use_swi:
+    OPTIONAL_FEATURE_COLS.append('SWI')
 
 ALL_SAMPLE_COLS = BASE_FEATURE_COLS + OPTIONAL_FEATURE_COLS + ['Vegetation']
 new_names = {
@@ -153,10 +154,15 @@ for area in study_areas.itertuples():
         n_folds_area = N_FOLDS
 
     # ── Feature matrix and target vector ──────────────────────────────────────
-    # Excludes 'Slope' (sampled but not used as a model feature) and 'Vegetation'
-    # (the target). TRI/SWI are included only if enabled in config.yaml.
+    # Excludes 'Vegetation' (the target). Slope/TRI/SWI are included only if
+    # enabled in config.yaml — Slope is always sampled regardless (it's a base
+    # terrain variable), so toggling features.use_slope doesn't require
+    # re-sampling, unlike features.use_tri/use_swi.
     feature_cols = ['Landforms', 'Distance', 'Aspect_sin', 'Elevation',
-                    'Curvature', 'Aspect_cos', 'Hillshade'] + OPTIONAL_FEATURE_COLS
+                    'Curvature', 'Aspect_cos', 'Hillshade']
+    if cfg.features.use_slope:
+        feature_cols.append('Slope')
+    feature_cols += OPTIONAL_FEATURE_COLS
     x = gdf[feature_cols]
     # Recode: 1 (vegetation) → 1, 2 (non-vegetation) → 0
     y = gdf['Vegetation'].replace({1: 1, 2: 0}).astype(int)

@@ -13,8 +13,8 @@ Low_res_script.py). The key differences from the 1 m model are:
   - Additional predictor: Snow_cover — a Sentinel-2-derived fraction of the
     growing season during which a pixel is snow-covered. Persistent snow
     cover prevents or delays vegetation establishment.
-  - Features (10 variables by default): Landforms, Distance, Aspect_sin,
-    Elevation, Curvature, Aspect_cos, Hillshade, TRI, SWI, Snow_cover
+  - Features (11 variables by default): Landforms, Distance, Aspect_sin,
+    Elevation, Curvature, Aspect_cos, Hillshade, Slope, TRI, SWI, Snow_cover
     TRI/SWI/Snow_cover can be excluded via config.yaml's features.use_tri /
     features.use_swi / features.use_snow (e.g. to sanity-check the pipeline
     before those rasters are available) — Sample_areas_20m.py must be re-run
@@ -91,10 +91,15 @@ new_names = {
     for i, name in enumerate(ALL_SAMPLE_COLS, start=1)
 }
 
-# Excludes 'Slope' (sampled but not used as a model feature) and 'Vegetation'
-# (the target). TRI/SWI/Snow_cover are included only if enabled in config.yaml.
+# Excludes 'Vegetation' (the target). Slope/TRI/SWI/Snow_cover are included
+# only if enabled in config.yaml — Slope is always sampled regardless (it's a
+# base terrain variable), so toggling features.use_slope doesn't require
+# re-sampling, unlike features.use_tri/use_swi/use_snow.
 feature_cols = ['Landforms', 'Distance', 'Aspect_sin', 'Elevation',
-                'Curvature', 'Aspect_cos', 'Hillshade'] + OPTIONAL_FEATURE_COLS
+                'Curvature', 'Aspect_cos', 'Hillshade']
+if cfg.features.use_slope:
+    feature_cols.append('Slope')
+feature_cols += OPTIONAL_FEATURE_COLS
 
 random_split_rows = []
 block_cv_rows     = []

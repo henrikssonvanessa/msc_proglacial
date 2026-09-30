@@ -31,12 +31,22 @@ paths:
   # so the year suffix doesn't need to be listed here.
   dem_tiles_dir: "Data/DSM/Mosaics"
   snow_cover_dir: "Data/Snow_data"
-  # Manually-generated (QGIS/SAGA) TRI and SWI rasters, one flat folder per resolution,
-  # since these aren't computed by any script in this repo.
-  tri_swi_1m_dir: "Data/DEM/TRI_SWI_1m"
-  tri_swi_20m_dir: "Data/DEM/TRI_SWI_20m"
+  # TRI and SWI rasters, one flat folder per resolution. Written by
+  # Compute_TRI_SWI.py (via SAGA GIS) from the DEMs Variable_calculation.py /
+  # Low_res_script.py already produced; can also be generated manually in
+  # QGIS/SAGA instead, as long as they land here with the same filenames.
+  tri_swi_1m_dir: "Data/SAGA/TRI_SWI_1m"
+  tri_swi_20m_dir: "Data/SAGA/TRI_SWI_20m"
   glacier_polygon_scratch_gdb: "GIS/Proglacial_project.gdb/glacier_polygon_Select"  # scratch feature class for DistanceAccumulation
   arcgis_toolbox_data_management: "c:/program files/arcgis/pro/Resources/ArcToolbox/toolboxes/Data Management Tools.tbx"
+  saga_cmd: "C:/Program Files/QGIS 3.44.10/apps/saga/saga_cmd.exe"  # SAGA 9.11.1 saga_cmd.exe; used by Compute_TRI_SWI.py
+  # SAGA is bundled via QGIS/OSGeo4W, which needs its environment (PATH,
+  # GDAL_DATA, PROJ_LIB, etc.) set up before saga_cmd.exe will run at all —
+  # the same way QGIS's own bin/saga_gui.bat sources this before launching
+  # saga_gui.exe. Compute_TRI_SWI.py sources this batch file before every
+  # saga_cmd call. Set to "" (empty) if you switch to a standalone SAGA
+  # install that doesn't need it.
+  saga_env_bat: "C:/Program Files/QGIS 3.44.10/bin/o4w_env.bat"
 
 random_state: 42          # shared seed for all RF models and random train/test splits
 nodata_value: -9999        # sentinel used throughout for masked/NoData pixels
@@ -77,20 +87,26 @@ snow_file_lookup:
   Helags: "Helags_snow_cover.tif"
 
 features:
-  # Toggle optional predictor layers on/off. Set to false to skip a layer whose
+  # Toggle optional predictor layers on/off. use_tri/use_swi/use_snow control
+  # whether that layer is SAMPLED at all — set to false to skip a layer whose
   # source rasters aren't available yet (e.g. TRI/SWI not regenerated for a new
   # area, or snow cover not computed) so the rest of the pipeline can still be
   # smoke-tested end to end. Read by Sample_areas_1m.py (1 m sampling),
   # Sample_areas_20m.py (20 m sampling), RF_block_test.py, and
   # rf_vegetation_20m.py. Re-run sampling AND RF training together whenever you
-  # change these — the sample shapefile's columns depend on which layers were
-  # included at sampling time, so a stale shapefile sampled with different
-  # toggles will not match. NOTE: geodiversity_index_HL.py/PCA.py and
-  # Selection_ratio.py are not affected by these toggles — they read TRI/SWI
-  # directly and need real rasters to run at all.
-  use_tri: false
-  use_swi: false
+  # change these three — the sample shapefile's columns depend on which layers
+  # were included at sampling time, so a stale shapefile sampled with
+  # different toggles will not match. NOTE: geodiversity_index_HL.py/PCA.py
+  # are not affected by any of these toggles — they read TRI/SWI directly and
+  # need real rasters to run at all.
+  use_tri: true
+  use_swi: true
   use_snow: false    # 20 m only (Low_res_script.py / rf_vegetation_20m.py)
+  # Slope is always sampled (it's one of the base terrain variables), so
+  # use_slope only controls whether it's included as a MODEL feature — no
+  # re-sampling needed when you change it. Read by RF_block_test.py,
+  # rf_vegetation_20m.py, and Selection_ratio.py.
+  use_slope: false
 
 random_forest:
   vegetation_classifier:      # Veg_RF_polygon_cv.py — 4-band ortho pixel classifier
@@ -130,6 +146,25 @@ high_res_sampling:
   sample_max_per_class: 2000
   min_sample_distance_m: 2
 
+saga:
+  # Parameters for Compute_TRI_SWI.py's SAGA GIS calls. Names/choice indices
+  # verified against SAGA 9.11.1 (paths.saga_cmd) — if you're on a different
+  # SAGA version and a call fails, run e.g. `saga_cmd ta_hydrology 15` with no
+  # other arguments from a terminal to print that build's exact parameter
+  # list, and adjust the keys below to match.
+  tri:   # ta_morphometry tool 16 "Terrain Ruggedness Index (TRI)"
+    mode: 0            # neighbourhood shape: 0 = square, 1 = circle
+    radius: 2          # search radius, in cells
+    dw_weighting: 1    # distance weighting: 0 = none, 1 = inverse distance, 2 = exponential, 3 = gaussian
+  swi:   # ta_hydrology tool 15 "SAGA Wetness Index" (the wetness index itself
+         # is that tool's TWI output parameter, despite the tool's name). All default settings.
+    suction: 10.0
+    area_type: 1
+    slope_type: 1       # 0 = local slope, 1 = catchment slope
+    slope_min: 0.0
+    slope_off: 0.1
+    slope_weight: 1.0
+
 geodiversity:
   window_size: 10                # pixels, sliding-window size for landform diversity (H&L method)
   pca_feature_cols: ["Curvature", "Landforms", "TRI", "SWI"]
@@ -137,8 +172,8 @@ geodiversity:
   # paths.tri_swi_20m_dir); {area} is replaced with the glacier name.
   tri_filename_1m: "{area}_TRI.tif"
   swi_filename_1m: "{area}_SWI.tif"
-  tri_filename_20m: "TIF_TRI_{area}_DEM_clip.tif"
-  swi_filename_20m: "TIF_SWI_{area}_DEM_fill.tif"
+  tri_filename_20m: "{area}_TRI_20.tif"
+  swi_filename_20m: "{area}_SWI_20.tif"
 
 classification:
   # Geodiversity classes are assigned using global mean +/- sd_multipliers * std

@@ -27,8 +27,8 @@ The PDP is overlaid on the same axes as the selection ratio to show whether
 the statistical model's predictions align with the raw habitat use patterns.
 
 The script handles four resolution modes (set RESOLUTION at top):
-  1  → 1 m model  (9 features, all study areas)
-  20 → 20 m model (10 features including Snow_cover, all study areas)
+  1  → 1 m model  (10 features, all study areas)
+  20 → 20 m model (11 features including Snow_cover, all study areas)
   '5mm'  → drone model at 5 mm (Kårsa only, no Distance)
   '12cm' → drone model at 12 cm (Kårsa only)
 
@@ -75,13 +75,16 @@ RF_PARAMS       = dict(n_estimators=cfg.random_forest.terrain_classifier.n_estim
 if RESOLUTION == 1:
     data_folder   = cfg.paths.outputs_1m
     feature_cols  = ['Landforms', 'Distance', 'Aspect_sin', 'Elevation',
-                     'Curvature', 'Aspect_cos', 'Hillshade', 'TRI', 'SWI']
+                     'Curvature', 'Aspect_cos', 'Hillshade']
+    if cfg.features.use_slope:
+        feature_cols.append('Slope')
+    feature_cols += ['TRI', 'SWI']
     new_names     = {
         "v_raster_1": "Aspect_cos", "v_raster_2": "Aspect_sin",
         "v_raster_3": "Curvature",  "v_raster_4": "Elevation",
         "v_raster_5": "Distance",   "v_raster_6": "Hillshade",
         "v_raster_7": "Landforms",  "v_raster_8": "Slope",
-        "v_raster_9": "SWI",        "v_raste_10": "TRI",
+        "v_raster_9": "TRI",        "v_raste_10": "SWI",
         "v_raste_11": "Vegetation"
     }
     veg_values    = [1, 2]   # 1 = veg, 2 = non-veg
@@ -91,8 +94,10 @@ if RESOLUTION == 1:
 elif RESOLUTION == 20:
     data_folder   = cfg.paths.outputs_20m
     feature_cols  = ['Landforms', 'Distance', 'Aspect_sin', 'Elevation',
-                     'Curvature', 'Aspect_cos', 'Hillshade', 'TRI', 'SWI',
-                     'Snow_cover']
+                     'Curvature', 'Aspect_cos', 'Hillshade']
+    if cfg.features.use_slope:
+        feature_cols.append('Slope')
+    feature_cols += ['TRI', 'SWI', 'Snow_cover']
     new_names     = {
         "v_raster_1": "Aspect_cos", "v_raster_2": "Aspect_sin",
         "v_raster_3": "Curvature",  "v_raster_4": "Elevation",
@@ -108,7 +113,10 @@ elif RESOLUTION == 20:
 elif RESOLUTION == '5mm':
     data_folder   = "Data/Python/Outputs_5mm"
     feature_cols  = ['Aspect_cos', 'Aspect_sin', 'Curvature', 'Elevation',
-                     'Hillshade', 'Landforms', 'Slope', 'SWI', 'TRI']
+                     'Hillshade', 'Landforms']
+    if cfg.features.use_slope:
+        feature_cols.append('Slope')
+    feature_cols += ['SWI', 'TRI']
     new_names     = {
         "v_raster_1": "Aspect_cos", "v_raster_2": "Aspect_sin",
         "v_raster_3": "Curvature",  "v_raster_4": "Hillshade",
@@ -123,7 +131,10 @@ elif RESOLUTION == '5mm':
 elif RESOLUTION == '12cm':
     data_folder   = "Data/Python/Outputs_12cm"
     feature_cols  = ['Aspect_cos', 'Aspect_sin', 'Curvature', 'Distance',
-                     'Elevation', 'Hillshade', 'Landforms', 'Slope', 'SWI', 'TRI']
+                     'Elevation', 'Hillshade', 'Landforms']
+    if cfg.features.use_slope:
+        feature_cols.append('Slope')
+    feature_cols += ['SWI', 'TRI']
     new_names     = {
         "v_raster_1": "Aspect_cos", "v_raster_2": "Aspect_sin",
         "v_raster_3": "Curvature",  "v_raster_4": "Elevation",
