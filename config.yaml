@@ -15,7 +15,7 @@ paths:
   glacier_shp: "Data/Study_areas/glacier_polygon.shp"             # glacier polygons (distance-from-glacier calc)
   lookup_table_gd: "Data/Study_areas/lookup_table_gd.csv"  # per-area sun azimuth/altitude (for hillshade)
   lookup_table_ortho: "Data/Study_areas/lookup_table.csv"  # per-area orthophoto source path (column: ortho); read by Proglacial_project.py
-  training_gdb: "Data/gdb/training_data.gdb"
+  training_gdb: "Data/gdb/training_data_LIA.gdb"
   external_test_gdb: "Data/gdb/external_test_data.gdb"
   outputs_1m: "Data/Outputs_1m"
   outputs_20m: "Data/Outputs_20m"
@@ -99,14 +99,22 @@ features:
   # different toggles will not match. NOTE: geodiversity_index_HL.py/PCA.py
   # are not affected by any of these toggles — they read TRI/SWI directly and
   # need real rasters to run at all.
-  use_tri: true
+  use_tri: false
   use_swi: true
   use_snow: false    # 20 m only (Low_res_script.py / rf_vegetation_20m.py)
   # Slope is always sampled (it's one of the base terrain variables), so
   # use_slope only controls whether it's included as a MODEL feature — no
   # re-sampling needed when you change it. Read by RF_block_test.py,
   # rf_vegetation_20m.py, and Selection_ratio.py.
-  use_slope: false
+  use_slope: true
+  # Hillshade is also always sampled, so use_hillshade only controls whether it's
+  # included as a MODEL feature (no re-sampling needed). Currently read by
+  # RF_block_test.py only.
+  use_hillshade: false
+  # Landforms is also always sampled, so use_landforms only controls whether it's
+  # included as a MODEL feature (no re-sampling needed). Currently read by
+  # RF_block_test_auc.py only.
+  use_landforms: false
 
 random_forest:
   vegetation_classifier:      # Veg_RF_polygon_cv.py — 4-band ortho pixel classifier

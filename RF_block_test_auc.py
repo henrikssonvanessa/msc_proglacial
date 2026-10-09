@@ -3,6 +3,10 @@
 """
 Step 6a — Random Forest vegetation prediction at 1 m with spatial block cross-validation.
 
+Copy of RF_block_test.py with permutation importance also scored by ROC AUC,
+both on the refit model and on the held-out blocks of each block-CV fold (see
+"Permutation importance (ROC AUC)" below). Everything else is unchanged.
+
 Why spatial block cross-validation?
 ------------------------------------
 Terrain data has strong spatial autocorrelation: pixels close together tend to
@@ -39,12 +43,18 @@ Outputs:
   Data/Python/Outputs/Figures/{area}_feat_imp.png
   Data/Python/Outputs/Figures/{area}_perm_imp.png
   Data/Python/Outputs/Figures/{area}_perm_veg.png
+  Data/Python/Outputs/Figures/{area}_perm_auc.png
+  Data/Python/Outputs/Figures/{area}_perm_auc_heldout.png
+  Data/Python/Outputs/Figures/{area}_perm_auc_heldout_groups.png
   Data/Python/Outputs/Figures/{area}_pdd_veg.png
   Data/Python/Outputs/Figures/{area}_corr_matrix_spearman.png
   Data/Python/Outputs/metrics_random_split.csv
   Data/Python/Outputs/metrics_block_cv.csv
   Data/Python/Outputs/metrics_comparison.csv     (random split vs block CV, with deltas)
   Data/Python/Outputs/perm_importance_veg_recall.csv
+  Data/Python/Outputs/perm_importance_auc.csv
+  Data/Python/Outputs/perm_importance_auc_heldout.csv
+  Data/Python/Outputs/perm_importance_auc_heldout_groups.csv
 """
 
 import os
@@ -55,7 +65,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import GroupKFold, cross_validate
 from sklearn.metrics import (classification_report, confusion_matrix,
                              accuracy_score, recall_score, make_scorer,
-                             precision_score, f1_score)
+                             precision_score, f1_score, roc_auc_score)
 from sklearn.inspection import permutation_importance, PartialDependenceDisplay
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -75,7 +85,30 @@ BLOCK_SIZE = cfg.cross_validation.block_size_1m   # spatial block size in metres
                                                    # range of spatial autocorrelation in the terrain data
 N_FOLDS    = cfg.cross_validation.block_cv_folds  # number of spatial CV folds
 RF_PARAMS  = dict(n_estimators=cfg.random_forest.terrain_classifier.n_estimators, random_state=cfg.random_state)
+# Variables shuffled together for grouped held-out importance (correlated
+# variables share importance, so shuffling one alone can understate them).
+# A group is skipped if any of its members is not in the model.
+IMPORTANCE_GROUPS = {
+    'Distance+Elevation': ['Distance', 'Elevation'],
+    'Slope+SWI':          ['Slope', 'SWI'],
+}
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+def grouped_auc_drop(est, x_test, y_test, cols, n_repeats, rng):
+    """Mean drop in ROC AUC when the columns in `cols` are shuffled together
+    (same row order for all of them, so their relationship to each other is
+    kept but their link to vegetation is broken)."""
+    pos = list(est.classes_).index(1)
+    base = roc_auc_score(y_test, est.predict_proba(x_test)[:, pos])
+    drops = []
+    for _ in range(n_repeats):
+        x_perm = x_test.copy()
+        order = rng.permutation(len(x_test))
+        x_perm[cols] = x_test[cols].to_numpy()[order]
+        drops.append(base - roc_auc_score(y_test, est.predict_proba(x_perm)[:, pos]))
+    return np.mean(drops)
+
 
 # ── Sample shapefile column mapping ─────────────────────────────────────────────
 # High_res_script.py's sample_areas() (called from Sample_areas_1m.py) always
@@ -113,6 +146,9 @@ fig_folder.mkdir(parents=True, exist_ok=True)
 random_split_rows = []
 block_cv_rows     = []
 perm_veg_rows     = []
+perm_auc_rows     = []
+perm_auc_heldout_rows = []
+perm_auc_groups_rows  = []
 
 for area in study_areas.itertuples():
     area_name = area.Glacier_na
@@ -154,13 +190,15 @@ for area in study_areas.itertuples():
         n_folds_area = N_FOLDS
 
     # ── Feature matrix and target vector ──────────────────────────────────────
-    # Excludes 'Vegetation' (the target). Hillshade/Slope/TRI/SWI are included
-    # only if enabled in config.yaml — Hillshade and Slope are always sampled
-    # regardless (they're base terrain variables), so toggling
-    # features.use_hillshade / use_slope doesn't require re-sampling, unlike
+    # Excludes 'Vegetation' (the target). Landforms/Hillshade/Slope/TRI/SWI are
+    # included only if enabled in config.yaml — Landforms, Hillshade and Slope
+    # are always sampled regardless (they're base terrain variables), so toggling
+    # features.use_landforms / use_hillshade / use_slope doesn't require re-sampling, unlike
     # features.use_tri/use_swi.
-    feature_cols = ['Landforms', 'Distance', 'Aspect_sin', 'Elevation',
+    feature_cols = ['Distance', 'Aspect_sin', 'Elevation',
                     'Curvature', 'Aspect_cos']
+    if cfg.features.use_landforms:
+        feature_cols.insert(0, 'Landforms')
     if cfg.features.use_hillshade:
         feature_cols.append('Hillshade')
     if cfg.features.use_slope:
@@ -180,6 +218,7 @@ for area in study_areas.itertuples():
         'precision': make_scorer(precision_score, zero_division=0),
         'recall':    make_scorer(recall_score,    zero_division=0),
         'f1':        make_scorer(f1_score,        zero_division=0),
+        'auc':       'roc_auc',   # NaN for a fold whose test blocks hold only one class
     }
 
     cv_results = cross_validate(
@@ -195,11 +234,13 @@ for area in study_areas.itertuples():
     print("\n── Spatial Block CV Results ──")
     block_row = {'area': area_name, 'n_samples': len(gdf),
                  'n_blocks': n_blocks, 'n_folds': n_folds_area}
-    for metric in ['accuracy', 'precision', 'recall', 'f1']:
+    for metric in ['accuracy', 'precision', 'recall', 'f1', 'auc']:
         scores = cv_results[f'test_{metric}']
-        block_row[f'{metric}_mean'] = round(scores.mean(), 4)
-        block_row[f'{metric}_std']  = round(scores.std(),  4)
-        print(f"  {metric.capitalize():10s}: {scores.mean():.3f} ± {scores.std():.3f}  "
+        # nanmean/nanstd: AUC is NaN for single-class test folds; other metrics never are
+        block_row[f'{metric}_mean'] = round(np.nanmean(scores), 4)
+        block_row[f'{metric}_std']  = round(np.nanstd(scores),  4)
+        label = 'AUC' if metric == 'auc' else metric.capitalize()
+        print(f"  {label:10s}: {np.nanmean(scores):.3f} ± {np.nanstd(scores):.3f}  "
               f"(folds: {np.round(scores, 3)})")
     block_cv_rows.append(block_row)
 
@@ -212,6 +253,7 @@ for area in study_areas.itertuples():
     rf_rs = RandomForestClassifier(**RF_PARAMS)
     rf_rs.fit(x_train, y_train)
     preds_rs = rf_rs.predict(x_test)
+    proba_rs = rf_rs.predict_proba(x_test)[:, list(rf_rs.classes_).index(1)]
 
     rs_row = {
         'area':       area_name,
@@ -220,11 +262,13 @@ for area in study_areas.itertuples():
         'precision':  round(precision_score(y_test, preds_rs, zero_division=0), 4),
         'recall':     round(recall_score(y_test,    preds_rs, zero_division=0), 4),
         'f1':         round(f1_score(y_test,        preds_rs, zero_division=0), 4),
+        'auc':        round(roc_auc_score(y_test,   proba_rs), 4),
     }
     random_split_rows.append(rs_row)
     print(f"\n── Random Split Results ──")
-    for metric in ['accuracy', 'precision', 'recall', 'f1']:
-        print(f"  {metric.capitalize():10s}: {rs_row[metric]:.3f}")
+    for metric in ['accuracy', 'precision', 'recall', 'f1', 'auc']:
+        label = 'AUC' if metric == 'auc' else metric.capitalize()
+        print(f"  {label:10s}: {rs_row[metric]:.3f}")
 
     # ── Refit on ALL data for importance and PDP plots ─────────────────────────
     # Cross-validation estimates generalisation performance; importance and PDP
@@ -290,6 +334,138 @@ for area in study_areas.itertuples():
         row[f'{feat}_mean'] = round(imp, 4)
         row[f'{feat}_std']  = round(std, 4)
     perm_veg_rows.append(row)
+
+    # ── Permutation importance (ROC AUC) ──────────────────────────────────────
+    # Same as above but scored on ROC AUC: the probability that a randomly chosen
+    # vegetated sample gets a higher predicted vegetation probability than a
+    # randomly chosen non-vegetated one (1 = perfect separation, 0.5 = random).
+    # Unlike accuracy it does not depend on the 0.5 threshold and is not
+    # dominated by the majority (non-vegetation) class.
+    perm_auc = permutation_importance(rf, x, y, scoring='roc_auc',
+                                      n_repeats=30, random_state=cfg.random_state, n_jobs=-1)
+    indices = np.argsort(perm_auc.importances_mean)
+    plt.figure(figsize=(12, 10))
+    plt.barh(np.array(x.columns)[indices],
+             perm_auc.importances_mean[indices],
+             xerr=perm_auc.importances_std[indices])
+    plt.xlabel("Permutation Importance (mean decrease in ROC AUC)")
+    plt.title(f"Permutation Importance — ROC AUC — {area_name}")
+    plt.tight_layout()
+    plt.savefig(f"{fig_folder}/{area_name}_perm_auc.png")
+    plt.close()
+    print("Permutation importance (ROC AUC) figure saved.")
+
+    row = {'area': area_name}
+    for feat, imp, std in zip(feature_cols, perm_auc.importances_mean, perm_auc.importances_std):
+        row[f'{feat}_mean'] = round(imp, 4)
+        row[f'{feat}_std']  = round(std, 4)
+    perm_auc_rows.append(row)
+
+    # ── Permutation importance (ROC AUC) on held-out blocks ───────────────────
+    # The importances above use the refit model on its own training data, which
+    # can overstate variables that mainly help the model recognise location.
+    # Here each block-CV fold model is instead scored on its test blocks (never
+    # seen in training), and the results are averaged across folds. The error
+    # bars are the SD across folds, i.e. how much importance varies between
+    # parts of the study area. Folds whose test blocks contain only one class
+    # are skipped, since AUC is undefined there.
+    # GroupKFold is deterministic, so gkf.split() reproduces the same folds, in
+    # the same order, as cross_validate() used for cv_results['estimator'].
+    #
+    # Grouped importance: each IMPORTANCE_GROUPS group is also shuffled as a
+    # whole on the same held-out folds. Compared with the sum of its members'
+    # individual importances: group >> sum means the members overlap (the model
+    # falls back on one when the other is shuffled); group ≈ sum means they
+    # contribute independently and the individual results can be read alone.
+    active_groups = {name: members for name, members in IMPORTANCE_GROUPS.items()
+                     if all(m in feature_cols for m in members)}
+    group_rng = np.random.default_rng(cfg.random_state)
+    fold_imps = []
+    fold_group_imps = []
+    n_folds_skipped = 0
+    for est, (_, test_idx) in zip(cv_results['estimator'],
+                                  gkf.split(x, y, groups=block_ids)):
+        x_test, y_test = x.iloc[test_idx], y.iloc[test_idx]
+        if y_test.nunique() < 2 or len(est.classes_) < 2:
+            n_folds_skipped += 1
+            continue
+        res = permutation_importance(est, x_test, y_test, scoring='roc_auc',
+                                     n_repeats=10, random_state=cfg.random_state, n_jobs=-1)
+        fold_imps.append(res.importances_mean)
+        fold_group_imps.append([grouped_auc_drop(est, x_test, y_test, members, 10, group_rng)
+                                for members in active_groups.values()])
+
+    if fold_imps:
+        fold_imps = np.array(fold_imps)            # shape (n_folds_used, n_features)
+        heldout_mean = fold_imps.mean(axis=0)
+        heldout_std  = fold_imps.std(axis=0)
+        n_folds_used = len(fold_imps)
+        print(f"Held-out permutation importance: {n_folds_used} folds used, "
+              f"{n_folds_skipped} skipped (single-class test fold).")
+
+        indices = np.argsort(heldout_mean)
+        plt.figure(figsize=(12, 10))
+        plt.barh(np.array(x.columns)[indices],
+                 heldout_mean[indices],
+                 xerr=heldout_std[indices])
+        plt.xlabel("Permutation Importance (mean decrease in ROC AUC on held-out blocks)")
+        plt.title(f"Permutation Importance — ROC AUC, held-out blocks — {area_name}\n"
+                  f"(mean ± SD across {n_folds_used} folds)")
+        plt.tight_layout()
+        plt.savefig(f"{fig_folder}/{area_name}_perm_auc_heldout.png")
+        plt.close()
+        print("Permutation importance (ROC AUC, held-out blocks) figure saved.")
+
+        row = {'area': area_name, 'n_folds_used': n_folds_used,
+               'n_folds_skipped': n_folds_skipped}
+        for feat, imp, std in zip(feature_cols, heldout_mean, heldout_std):
+            row[f'{feat}_mean'] = round(imp, 4)
+            row[f'{feat}_std']  = round(std, 4)
+        perm_auc_heldout_rows.append(row)
+
+        if active_groups:
+            fold_group_imps = np.array(fold_group_imps)   # shape (n_folds_used, n_groups)
+            group_names, group_vals, sum_vals = [], [], []
+            for g, (name, members) in enumerate(active_groups.items()):
+                member_idx = [feature_cols.index(m) for m in members]
+                group_per_fold = fold_group_imps[:, g]
+                sum_per_fold = fold_imps[:, member_idx].sum(axis=1)
+                rho = (gdf[members].corr(method='spearman').iloc[0, 1]
+                       if len(members) == 2 else np.nan)
+                print(f"  Group {name}: shuffled together {group_per_fold.mean():.4f}, "
+                      f"sum of individual {sum_per_fold.mean():.4f}, Spearman rho {rho:.2f}")
+                perm_auc_groups_rows.append({
+                    'area': area_name, 'group': name, 'members': ', '.join(members),
+                    'spearman_rho': round(rho, 3),
+                    'group_mean': round(group_per_fold.mean(), 4),
+                    'group_std': round(group_per_fold.std(), 4),
+                    'sum_individual_mean': round(sum_per_fold.mean(), 4),
+                    'sum_individual_std': round(sum_per_fold.std(), 4),
+                    'n_folds_used': n_folds_used,
+                })
+                group_names.append(f"{name}\n(rho = {rho:.2f})" if np.isfinite(rho) else name)
+                group_vals.append((group_per_fold.mean(), group_per_fold.std()))
+                sum_vals.append((sum_per_fold.mean(), sum_per_fold.std()))
+
+            # Two bars per group: shuffled together vs. sum of individual importances
+            pos = np.arange(len(group_names))
+            h = 0.38
+            plt.figure(figsize=(10, 2 + 1.5 * len(group_names)))
+            plt.barh(pos + h / 2, [v[0] for v in group_vals], height=h,
+                     xerr=[v[1] for v in group_vals], label='Shuffled together')
+            plt.barh(pos - h / 2, [v[0] for v in sum_vals], height=h,
+                     xerr=[v[1] for v in sum_vals], label='Sum of individual importances')
+            plt.yticks(pos, group_names)
+            plt.xlabel("Permutation Importance (mean decrease in ROC AUC on held-out blocks)")
+            plt.title(f"Grouped permutation importance — held-out blocks — {area_name}\n"
+                      f"(mean ± SD across {n_folds_used} folds)")
+            plt.legend(loc='lower right')
+            plt.tight_layout()
+            plt.savefig(f"{fig_folder}/{area_name}_perm_auc_heldout_groups.png")
+            plt.close()
+            print("Grouped permutation importance (ROC AUC, held-out blocks) figure saved.")
+    else:
+        print("Held-out permutation importance skipped — no fold had both classes in its test blocks.")
 
     # ── Partial dependence plots (PDPs) with histogram overlay ────────────────
     # A PDP shows the marginal effect of one feature on predicted vegetation
@@ -376,6 +552,19 @@ df_perm_veg = pd.DataFrame(perm_veg_rows)
 df_perm_veg.to_csv(csv_folder / "perm_importance_veg_recall.csv", index=False)
 print("Permutation importance (vegetation recall) saved to perm_importance_veg_recall.csv")
 
+df_perm_auc = pd.DataFrame(perm_auc_rows)
+df_perm_auc.to_csv(csv_folder / "perm_importance_auc.csv", index=False)
+print("Permutation importance (ROC AUC) saved to perm_importance_auc.csv")
+
+df_perm_auc_heldout = pd.DataFrame(perm_auc_heldout_rows)
+df_perm_auc_heldout.to_csv(csv_folder / "perm_importance_auc_heldout.csv", index=False)
+print("Permutation importance (ROC AUC, held-out blocks) saved to perm_importance_auc_heldout.csv")
+
+df_perm_auc_groups = pd.DataFrame(perm_auc_groups_rows)
+df_perm_auc_groups.to_csv(csv_folder / "perm_importance_auc_heldout_groups.csv", index=False)
+print("Grouped permutation importance (ROC AUC, held-out blocks) saved to "
+      "perm_importance_auc_heldout_groups.csv")
+
 # ── Comparison table: random split vs block CV side by side ───────────────────
 # Negative delta values indicate that the random split was optimistically biased
 # (inflated metrics due to spatial autocorrelation between train and test pixels).
@@ -384,12 +573,14 @@ df_comp = df_random.drop(columns=["n_samples"]).rename(columns={
     "precision": "rs_precision",
     "recall":    "rs_recall",
     "f1":        "rs_f1",
+    "auc":       "rs_auc",
 }).merge(
     df_block.rename(columns={
         "accuracy_mean":  "cv_accuracy_mean",  "accuracy_std":  "cv_accuracy_std",
         "precision_mean": "cv_precision_mean", "precision_std": "cv_precision_std",
         "recall_mean":    "cv_recall_mean",    "recall_std":    "cv_recall_std",
         "f1_mean":        "cv_f1_mean",        "f1_std":        "cv_f1_std",
+        "auc_mean":       "cv_auc_mean",       "auc_std":       "cv_auc_std",
     }),
     on="area",
     how="outer"
@@ -400,6 +591,7 @@ df_comp["delta_accuracy"]  = (df_comp["cv_accuracy_mean"]  - df_comp["rs_accurac
 df_comp["delta_precision"] = (df_comp["cv_precision_mean"] - df_comp["rs_precision"]).round(4)
 df_comp["delta_recall"]    = (df_comp["cv_recall_mean"]    - df_comp["rs_recall"]).round(4)
 df_comp["delta_f1"]        = (df_comp["cv_f1_mean"]        - df_comp["rs_f1"]).round(4)
+df_comp["delta_auc"]       = (df_comp["cv_auc_mean"]       - df_comp["rs_auc"]).round(4)
 
 df_comp.to_csv(csv_folder / "metrics_comparison.csv", index=False)
 print("Comparison table saved to metrics_comparison.csv")
